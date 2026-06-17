@@ -1,0 +1,7 @@
+name: scaffolding
+channels:
+  - bioconda
+  - conda-forge
+  - defaults
+dependencies:
+  - ragtag

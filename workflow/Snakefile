@@ -1,0 +1,15 @@
+# workflow/Snakefile
+# Entrypoint
+configfile: "config/config.yaml"
+
+def get_pam_fasta(wildcards):
+    if config.get("test_mode", False):
+        return "results/03_pam_discovery/ISO1.masked.euchromatic.PAMs.10pct.fa"
+    return "results/03_pam_discovery/ISO1.masked.euchromatic.PAMs.fa"
+
+rule all:
+    input:
+        "results/07_summary/pam_summary.csv"
+        #"results/04_synteny/ISO1_BL54591.delta" works up to here for sure
+
+include: "rules/analysis.smk"

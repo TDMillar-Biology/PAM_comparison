@@ -1,0 +1,8 @@
+2L_RagTag
+2R_RagTag
+3L_RagTag
+3R_RagTag
+4_RagTag
+mitochondrion_genome_RagTag
+X_RagTag
+Y_RagTag

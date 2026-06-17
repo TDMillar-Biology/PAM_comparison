@@ -1,0 +1,22 @@
+# ==========================================
+# CRISPR-CFD Pipeline Configuration
+# ==========================================
+
+# Execution Mode
+test_mode: true # Set to true to run analysis on a 10% sample of PAMs for rapid testing
+
+# System
+threads: 16
+
+# Data Paths
+ref_genome: "data/reference_genome/ISO1-r6.58_main.fasta"
+query_assembly: "data/assemblies/BL54591.curated.broken.fasta"
+repeat_lib: "data/repeat_libraries/LarracuenteLab.Repeat.library.specieslib_mod2_Mel_042623.fasta"
+euchromatin_bed: "config/euchromatin_boundaries.bed"
+
+# Alignment Parameters
+bowtie_mismatches: 3
+
+cfd:
+  mismatch_scores: "data/scoring_parameters/mismatch_score.pkl"
+  pam_scores: "data/scoring_parameters/pam_scores.pkl"

@@ -1,0 +1,16 @@
+name: python_bio
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python=3.11
+  - biopython
+  - pandas
+  - numpy
+  - pysam
+  - bedtools
+  - intervaltree
+  - pip
+  - pip:
+    - -e /home/mahullocaladmin/Desktop/svmu2_package ## This is local to my machine, fix for publication

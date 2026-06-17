@@ -1,0 +1,8 @@
+name: alignment
+channels:
+  - bioconda
+  - conda-forge
+  - defaults
+dependencies:
+  - bowtie
+  - mummer4

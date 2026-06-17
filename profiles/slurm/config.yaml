@@ -1,0 +1,15 @@
+# profiles/slurm/config.yaml
+
+executor: cluster-generic
+cluster-generic-submit-cmd: "sbatch -A 132714815093 -p medium -t {resources.runtime} --ntasks=1 --mem={resources.mem_mb} --cpus-per-task={threads} --job-name=smk-{rule} --output=logs/{rule}-%j.out --error=logs/{rule}-%j.err"
+jobs: 11
+latency-wait: 60
+use-conda: true
+use-singularity: true
+conda-frontend: conda
+printshellcmds: true # equivalent to -p
+
+default-resources:
+  - mem_mb=4000
+  - runtime=60
+  - threads=1

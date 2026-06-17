@@ -1,0 +1,8 @@
+name: utilities
+channels:
+  - bioconda
+  - conda-forge
+  - defaults
+dependencies:
+  - seqtk
+  - bedtools
