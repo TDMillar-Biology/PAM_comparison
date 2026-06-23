@@ -25,7 +25,6 @@ def init_worker(trees):
     global _SYNTENY_TREES
     _SYNTENY_TREES = trees
 
-
 def lookup_row(args):
     """
     Look up a single CFD row against synteny interval trees.
@@ -46,7 +45,6 @@ def lookup_row(args):
     # (or customize selection logic here)
     best = max(hits, key=lambda iv: (iv.end - iv.begin, -iv.data.index)) # longest with overlap
     return best.data.index
-
 
 ############################################################
 # Main pipeline

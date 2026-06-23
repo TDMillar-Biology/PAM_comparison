@@ -71,7 +71,6 @@ def merge_synteny(iso1_csv, bl_csv, out_csv):
     final.to_csv(out_csv, index=False)
     print(f"[✔] Wrote final merged table → {out_csv}")
 
-
 # ------------------------------------------------------------
 # CLI entry point
 # ------------------------------------------------------------

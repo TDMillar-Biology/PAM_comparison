@@ -252,8 +252,30 @@ rule compute_cfd_bl:
             --pam-scores {input.pam_scores}
         """
 
+rule classify_pam_orthology:
+    input:
+        ref_cfd = "results/06_cfd_scores/iso1_raw_cfd.csv",
+        query_cfd = "results/06_cfd_scores/bl_raw_cfd.csv",
+        delta = "results/04_synteny/ISO1_BL54591.delta"
+    output:
+        summary = "results/07_summary/pam_orthology_summary.csv"
+    conda:
+        "../envs/python_bio.yaml"
+    resources:
+        mem_mb = 8000,
+        runtime = 60
+    shell:
+        """
+        python3 workflow/scripts/classify_pam_orthology.py \
+            --ref-cfd {input.ref_cfd} \
+            --query-cfd {input.query_cfd} \
+            --delta {input.delta} \
+            --out {output.summary} \
+            --tol 1000
+        """
+
 # ==========================================
-# Stage 4: Annotate Synteny Blocks
+# OLD: Annotate Synteny Blocks -- set for deprecation
 # ==========================================
 rule annotate_synteny_iso1:
     input:
@@ -288,7 +310,7 @@ rule annotate_synteny_bl:
         """
 
 # ==========================================
-# Stage 5: Merge Synteny-Corrected Tables
+# OLD: Merge Synteny-Corrected Tables -- set for deprecation
 # ==========================================
 rule merge_synteny_tables:
     input:
