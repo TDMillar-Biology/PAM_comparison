@@ -76,18 +76,23 @@ class SyntenyBlock:
         """Return +1 for co-oriented blocks and -1 for inverted blocks."""
         return 1 if self.query_end >= self.query_start else -1
 
-def project_ref_to_query(self, ref_pos: int) -> float:
-    """ Classic slope intercept form interpolation """
-    ref_span = self.ref_max - self.ref_min
-    if ref_span == 0:
-        return float(self.query_start)
+    def project_ref_to_query(self, ref_pos: int) -> float:
+        """Project a reference coordinate into query coordinate space.
 
-    if self.orientation == 1:
-        slope = (self.query_max - self.query_min) / ref_span
-        return self.query_min + slope * (ref_pos - self.ref_min)
+        The stored query_start/query_end retain orientation. The interval-tree
+        indexes may normalize spans, but projection should preserve inversion
+        direction.
+        """
+        ref_span = self.ref_max - self.ref_min
+        if ref_span == 0:
+            return float(self.query_start)
 
-    slope = -(self.query_max - self.query_min) / ref_span
-    return self.query_max + slope * (ref_pos - self.ref_min)
+        frac = (ref_pos - self.ref_min) / ref_span
+        frac = max(0.0, min(1.0, frac))
+
+        if self.orientation == 1:
+            return self.query_min + frac * (self.query_max - self.query_min)
+        return self.query_max - frac * (self.query_max - self.query_min)
 
 
 @dataclass(frozen=True)
@@ -121,11 +126,13 @@ class QueryCandidate:
 # Robust adapters around svmu2 objects
 # -----------------------------------------------------------------------------
 
-def _block_from_svmu2_object(block: object) -> SyntenyBlock:
-    """
-    Convert an svmu2 block-like object into a SyntenyBlock.
-    """
+def _block_from_svmu2_object(block: object, fallback_index: int | str) -> SyntenyBlock:
+    """Convert an svmu2 primary synteny block into a local SyntenyBlock.
 
+    This is the only place where this script depends on the concrete svmu2
+    block schema. Keep it strict: if svmu2 changes these attributes, fail
+    here rather than fishing for alternate names throughout the PAM code.
+    """
     required = [
         "reference",
         "query",
@@ -134,24 +141,25 @@ def _block_from_svmu2_object(block: object) -> SyntenyBlock:
         "query_start",
         "query_end",
     ]
-
     missing = [attr for attr in required if not hasattr(block, attr)]
-
     if missing:
         raise AttributeError(
             f"SVMU2 block is missing required attribute(s): {missing}. "
-            "This is a signal of incompatibility between this script and your svmu2 install. Find compatible versions."
+            "Update _block_from_svmu2_object() for this svmu2 version."
         )
 
-    ref_chr = str(getattr(block, "reference"))
-    query_chr = str(getattr(block, "query"))
+    ref_chr = str(block.reference)
+    query_chr = str(block.query)
+    ref_start = int(block.reference_start)
+    ref_end = int(block.reference_end)
+    query_start = int(block.query_start)
+    query_end = int(block.query_end)
 
-    ref_start = int(getattr(block, "reference_start"))
-    ref_end = int(getattr(block,"reference_end"))
-    query_start = int(getattr(block,"query_start"))
-    query_end = int(getattr(block, "query_end"))
-    block_index = str(getattr(block, "index"))
-    block_id = str(f"{ref_chr}_{query_chr}_{block_index}")
+    # index is useful if svmu2 provides it; otherwise use deterministic
+    # enumeration supplied by the caller. This keeps block IDs stable within
+    # an alignment without requiring svmu2 to expose an ID field.
+    block_index = getattr(block, "index", fallback_index)
+    block_id = f"{ref_chr}_{query_chr}_{block_index}"
 
     return SyntenyBlock(
         ref_chr=ref_chr,
@@ -160,48 +168,83 @@ def _block_from_svmu2_object(block: object) -> SyntenyBlock:
         query_chr=query_chr,
         query_start=query_start,
         query_end=query_end,
-        block_id=block_id,
+        block_id=str(block_id),
         original=block,
     )
 
+
 def _iter_alignment_blocks(aln: object) -> Iterable[object]:
-    candidate_attrs = [
-        "primary_synteny_blocks",
-        "refined_path",
-        "primary_path",
-        "synteny_blocks",
-        "blocks",
-    ]
+    """Return the svmu2-resolved primary synteny blocks for one alignment."""
+    blocks = getattr(aln, "primary_synteny_blocks", None)
+    if blocks is None:
+        raise AttributeError(
+            f"Alignment {getattr(aln, 'reference', '<unknown>')} -> "
+            f"{getattr(aln, 'query', '<unknown>')} has no primary_synteny_blocks. "
+            "The svmu2 synteny resolver must populate this attribute."
+        )
+    return blocks
 
-    for attr in candidate_attrs:
-        value = getattr(aln, attr, None)
-        if value is not None:
-            return value
 
-    raise AttributeError(
-        f"Alignment {getattr(aln, 'reference', '<unknown>')} -> "
-        f"{getattr(aln, 'query', '<unknown>')} has no recognized synteny block list. "
-        f"Tried: {', '.join(candidate_attrs)}"
-    )
+def _resolve_primary_synteny(delta_file: str | Path) -> dict:
+    """Parse delta and ask svmu2 to resolve primary synteny.
+
+    Preferred path: svmu2.orchestration.synteny.resolve_synteny().
+    Fallback path: if immutable svmu2 fails while building its interval trees
+    due to reversed query intervals, re-parse and call the core synteny resolver
+    directly, then build safe local interval indexes in this script.
+    """
+    _, primary = parse(str(delta_file))
+
+    try:
+        return resolve_synteny(primary)
+    except ValueError as exc:
+        # Some svmu2 versions build query interval trees without normalizing
+        # inverted blocks. The synteny blocks themselves are still useful, so
+        # avoid modifying svmu2 and build safe local indexes below.
+        if "Null Interval" not in str(exc) and "IntervalTree" not in str(exc):
+            raise
+
+        print(
+            "[WARN] svmu2 resolve_synteny failed while building an interval tree. "
+            "Falling back to svmu2.core.synteny.resolve_alignment_synteny() and "
+            "building normalized local indexes."
+        )
+
+        _, primary = parse(str(delta_file))
+        try:
+            from svmu2.core.synteny import resolve_alignment_synteny
+        except ImportError as import_exc:
+            raise RuntimeError(
+                "Could not import svmu2.core.synteny.resolve_alignment_synteny "
+                "for fallback synteny resolution."
+            ) from import_exc
+
+        for aln in primary.values():
+            resolve_alignment_synteny(aln, expected_breakpoints=0)
+
+        return primary
 
 
 def build_synteny_blocks_from_delta(delta_file: str | Path) -> list[SyntenyBlock]:
     """Parse delta with svmu2, resolve synteny, and return lightweight blocks."""
-    _, primary = parse(str(delta_file))
-    primary = resolve_synteny(primary)
+    primary = _resolve_primary_synteny(delta_file)
 
     blocks: list[SyntenyBlock] = []
     used_ids: set[str] = set()
 
     for aln_key, aln in primary.items():
+        aln_ref = str(getattr(aln, "reference", aln_key))
+        aln_query = str(getattr(aln, "query", "query"))
         for i, block in enumerate(_iter_alignment_blocks(aln)):
+            fallback_index = f"{aln_ref}_{aln_query}_{i}"
+            b = _block_from_svmu2_object(block, fallback_index=fallback_index)
 
-            b = _block_from_svmu2_object(block)
-
-            # Guarantee unique IDs even if the underlying block index is only
-            # local to an alignment/chromosome.
             if b.block_id in used_ids:
-                print("THIS IS DEBUGGING ERROR FIND TREVOR ASAP")
+                raise ValueError(
+                    f"Duplicate synteny block ID generated: {b.block_id}. "
+                    "Block IDs must be unique for block-local PAM matching."
+                )
+
             used_ids.add(b.block_id)
             blocks.append(b)
 
@@ -216,9 +259,14 @@ def build_synteny_blocks_from_delta(delta_file: str | Path) -> list[SyntenyBlock
 # -----------------------------------------------------------------------------
 
 def _safe_interval(start: int, end: int) -> tuple[int, int]:
-    """Return a non-empty half-open interval for intervaltree."""
-    lo = min(start, end)
-    hi = max(start, end)
+    """Return a non-empty half-open interval for intervaltree.
+
+    SVMU/genomic coordinates are treated as inclusive endpoints here, while
+    intervaltree stores half-open intervals [begin, end). Therefore the upper
+    coordinate is incremented by one after normalization.
+    """
+    lo = int(min(start, end))
+    hi = int(max(start, end)) + 1
     if hi <= lo:
         hi = lo + 1
     return lo, hi
