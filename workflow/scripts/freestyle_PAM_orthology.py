@@ -5,6 +5,8 @@ Free hand implementation like the good old days before the cyborgs.
 
 from svmu2.orchestration.parse import parse
 from svmu2.orchestration.synteny import resolve_synteny
+from svmu2.models.line import build_alignment_primitives ## temporary
+
 import argparse
 from pathlib import Path
 import pandas as pd
@@ -96,12 +98,26 @@ def assign_synteny(df, trees):
 
     return df
 
+def plot(primary):
+    targets = primary.values()
+
+    for aln in targets:
+        primitives = build_alignment_primitives(aln)
+        xlabel = aln.reference
+        ylabel = aln.query
+        from svmu2.visualization.renderers import render_plotly
+        title = f"{aln.reference}_{aln.query}"
+        fig = render_plotly(primitives, title=title)
+        fig.show()
+
+
+
 def main():
     args = parse_args()
     ref_cfd = load_cfd_table(args.ref_cfd)
     qry_cfd = load_cfd_table(args.query_cfd)
     all_alns, primary_alns = parse(args.delta)
-
+    plot(primary=primary_alns)
     resolve_synteny(primary_alignments=primary_alns, breakpoint_map=None)
     # aln objs now have .reference_synteny_tree and .query_synteny_tree attributes
 

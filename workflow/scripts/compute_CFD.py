@@ -224,11 +224,13 @@ def compute_cfd_from_sam(samfile, fastafile, outfile, mismatch_scores, pam_score
     ## skip if N is in target / guide
     wt_N_mask = master["wt"].str.contains("N")
     sg_N_mask = master["sg"].str.contains("N")
+    pam_N_mask = master["pam"].str.contains("N")
 
     print(f"Skipped {wt_N_mask.sum()} ambiguous WT rows.")
     print(f"Skipped {sg_N_mask.sum()} ambiguous SG rows.")
+    print(f"Skipped {pam_N_mask.sum()} ambiguous PAM rows.")
 
-    master = master[~wt_N_mask & ~sg_N_mask].copy()
+    master = master[~wt_N_mask & ~sg_N_mask & ~pam_N_mask].copy()
 
     mm_scores, pam_scores = get_mm_pam_scores(mismatch_scores, pam_scores)
 

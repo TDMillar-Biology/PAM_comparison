@@ -117,7 +117,7 @@ rule nucmer_synteny:
 
 rule bowtie_index_ref:
     input:
-        ref = config["ref_genome"]
+        ref = "results/02_preprocessing/ISO1-r6.58_euchromatin.fixed.fasta"
     output:
         idx = "results/05_alignment/ISO1/ISO1.1.ebwt" 
     params:
@@ -167,7 +167,6 @@ rule bowtie_align_sample:
         bowtie -f -v {params.mismatch} -a --best --sam -p {threads} {params.prefix} {input.pams} > {output.sam}
         """
 
-
 # ==========================================
 # Missing Stage 2 Rules: BL54591 Alignment
 # ==========================================
@@ -209,7 +208,7 @@ rule bowtie_align_qry:
 rule compute_cfd_iso1:
     input:
         sam = "results/05_alignment/ISO1_pams.sam",
-        ref = config["ref_genome"],
+        ref = "results/02_preprocessing/ISO1-r6.58_euchromatin.fixed.fasta",
         mismatch_scores = config["cfd"]["mismatch_scores"],
         pam_scores = config["cfd"]["pam_scores"]
     output:
