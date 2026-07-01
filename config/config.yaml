@@ -3,10 +3,10 @@
 # ==========================================
 
 # Execution Mode
-test_mode: true # Set to true to run analysis on a 10% sample of PAMs for rapid testing
+test_mode: False # Set to true to run analysis on a 1% sample of PAMs for rapid testing
 
 # System
-threads: 16
+threads: 32
 
 # Data Paths
 ref_genome: "data/reference_genome/ISO1-r6.58_main.fasta"

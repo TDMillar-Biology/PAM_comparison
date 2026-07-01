@@ -85,7 +85,7 @@ rule sample_pams:
     output:
         sample = "results/03_pam_discovery/ISO1.masked.euchromatic.PAMs.10pct.fa"
     params:
-        percentage = "0.1",
+        percentage = "0.01",
         seed = "123"
     conda: 
         "../envs/utilities.yaml"
@@ -254,22 +254,24 @@ rule compute_cfd_bl:
 rule classify_pam_orthology:
     input:
         ref_cfd = "results/06_cfd_scores/iso1_raw_cfd.csv",
-        query_cfd = "results/06_cfd_scores/bl_raw_cfd.csv",
+        qry_cfd = "results/06_cfd_scores/bl_raw_cfd.csv",
         delta = "results/04_synteny/ISO1_BL54591.delta"
     output:
-        summary = "results/07_summary/pam_orthology_summary.csv"
+        summary = "results/07_summary/pam_orthology_summary.csv",
+        figures = directory("results/08_figures")
     conda:
-        "../envs/python_bio.yaml"
+        "../envs/PAM_orthology.yaml"
     resources:
         mem_mb = 8000,
         runtime = 60
     shell:
         """
-        python3 workflow/scripts/classify_pam_orthology.py \
+        python3 workflow/scripts/freestyle_PAM_orthology.py \
             --ref-cfd {input.ref_cfd} \
-            --query-cfd {input.query_cfd} \
+            --query-cfd {input.qry_cfd} \
             --delta {input.delta} \
             --out {output.summary} \
+            --figures {output.figures} \
             --tol 1000
         """
 

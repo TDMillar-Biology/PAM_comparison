@@ -3,329 +3,243 @@
 Compute CFD scores (Doench et al.) for all protospacer–genome alignments.
 
 This script:
-- reads SAM alignments (all mappings preserved)
-- extracts strand-aware genomic target sequences via BEDTools
-- computes CFD scores per alignment hit
-- outputs one row per genomic hit (no collapsing or orthology inference)
-
-Assumes a Linux environment with bedtools available.
-
-last reviewed June 2026 - fully functional, could benefit from modularizing compute_cfd_from_sam
+- Streams SAM alignments to maintain O(1) memory complexity.
+- Utilizes multiprocessing.Pool to distribute CFD calculations across CPU cores.
+- Workers independently query the reference FASTA to avoid IPC serialization errors.
+- Yields output asynchronously via imap_unordered for maximum throughput.
 '''
 import argparse
 import pickle
-import pandas as pd
 import pysam
 import sys
-import subprocess
-import tempfile
+import csv
+import multiprocessing as mp
 from Bio.Seq import Seq
 from collections import defaultdict
 from pathlib import Path
+
+############################################################
+# Global Worker Resources
+############################################################
+# These variables will be initialized once per worker process 
+# rather than being passed repeatedly through IPC.
+worker_fasta = None
+worker_mm_scores = None
+worker_pam_scores = None
+
+def worker_init(fasta_path, mismatch_path, pam_path):
+    """Initialize read-only objects in each worker's memory space."""
+    global worker_fasta, worker_mm_scores, worker_pam_scores
+    
+    worker_fasta = pysam.FastaFile(fasta_path)
+    worker_mm_scores = pickle.load(open(mismatch_path, "rb"))
+    worker_pam_scores = pickle.load(open(pam_path, "rb"))
 
 ############################################################
 # Utility functions
 ############################################################
 
 def revcom(s):
-    '''
-    accepts string with ATCG dictionary, returns RNA reverse complement of the string
-    with Watson Crick base pairing rules
-    '''
-    basecomp = {'A':'T','C':'G','G':'C','T':'A','U':'A'}
-    return ''.join(basecomp[b] for b in s[::-1])
+    basecomp = {'A':'T','C':'G','G':'C','T':'A','U':'A', 'N':'N'}
+    return ''.join(basecomp.get(b, 'N') for b in s[::-1])
 
-def get_mm_pam_scores(mismatch_scores, pam_scores):
-    '''
-    Load mismatch and PAM penalty scores from Doench et al. CFD model.
-    '''
-    mm_scores = pickle.load(open(mismatch_scores, "rb"))
-    pam_scores = pickle.load(open(pam_scores, "rb"))
-    return mm_scores, pam_scores
-
-def calc_cfd(wt, sg, pam, mm_scores, pam_scores):
-    '''
-    Compute CFD score (Doench et al.) as a multiplicative penalty model:
-    product of per-position mismatch penalties multiplied by PAM penalty.
-    '''
-
+def calc_cfd(wt, sg, pam):
+    """Computes CFD score using worker-level global scoring dicts."""
     score = 1.0
-
     wt_u = wt.replace("T", "U")
     sg_u = sg.replace("T", "U")
 
     for i, (w, s) in enumerate(zip(wt_u, sg_u), start=1):
         if w != s:
             key = f"r{w}:d{revcom(s)},{i}"
-            score *= mm_scores[key]
+            score *= worker_mm_scores.get(key, 1.0) 
 
-    score *= pam_scores[pam]
+    score *= worker_pam_scores.get(pam, 1.0)
     return score
 
-def load_fasta_strip_coords(path):
-    """
-    Load FASTA created by bedtools -name, stripping ::coords.
-    """
-    names, seqs = [], []
-    current_name = None
-    seq_parts = []
-
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if line.startswith(">"):
-                if current_name:
-                    names.append(current_name)
-                    seqs.append("".join(seq_parts))
-                clean = line[1:].split("::")[0]
-                current_name = clean
-                seq_parts = []
-            else:
-                seq_parts.append(line)
-
-    if current_name:
-        names.append(current_name)
-        seqs.append("".join(seq_parts))
-
-    return pd.DataFrame({"name": names, "genome_target": seqs})
-
 ############################################################
-# Main CFD workflow
+# Worker Execution
 ############################################################
 
-def compute_cfd_from_sam(samfile, fastafile, outfile, mismatch_scores, pam_scores):
-    sam = pysam.AlignmentFile(samfile)
+def process_chunk(chunk):
+    """
+    Worker function: takes a chunk of primitive read data, fetches genomic
+    context, calculates CFD, and returns formatted rows.
+    """
+    results = []
+    skipped = {'wt': 0, 'sg': 0, 'pam': 0}
 
-    records = []
-    bed_rows = []
-    hit_counter = defaultdict(int)
+    for read in chunk:
+        name, qseq, qname, is_reverse, ref_chr, ref_start, ref_end = read
 
-    # -------------------------
-    # Extract protospacers + BED
-    # -------------------------
-    lost_pams = []  ## store unmapped PAMs
+        try:
+            genomic_seq = worker_fasta.fetch(ref_chr, ref_start, ref_end).upper()
+        except (KeyError, ValueError):
+            continue 
 
-    for aln in sam:
-        # ---- Handle unmapped reads (lost PAMs) ----
-        if aln.is_unmapped: ## this is SAM flag 4
-            lost_pams.append({
-                "name": aln.query_name,
-                "protospacer": aln.query_sequence,
-                "note": "unmapped/lost"
-            })
+        if len(genomic_seq) < 23:
+            continue 
+
+        if is_reverse:
+            genomic_seq = revcom(genomic_seq)
+
+        wt  = genomic_seq[:20]
+        pam = genomic_seq[21:23] 
+        sg  = qseq[:20]
+
+        # Tally and skip ambiguities
+        if "N" in wt:
+            skipped['wt'] += 1
+            continue
+        if "N" in sg:
+            skipped['sg'] += 1
+            continue
+        if "N" in pam:
+            skipped['pam'] += 1
             continue
 
-        # Extra safety – malformed coordinate (probably not going to happen if a good aligner is used)
-        if aln.reference_start is None or aln.reference_end is None:
-            lost_pams.append({
-                "name": aln.query_name,
-                "protospacer": aln.query_sequence,
-                "note": "malformed"
-            })
-            continue
-        
-        # maintain an index as to give unique names to alignments
-        # this is done to accomodate one to many mapping
-        hit_counter[aln.query_name] += 1
-        suffix = hit_counter[aln.query_name]
-        name = f"{aln.query_name}_{suffix}"
+        cfd = calc_cfd(wt, sg, pam)
 
-        qseq = aln.query_sequence # this is the sequence we mapped
-        if aln.is_reverse: # this is SAM flag 16
-            qseq = str(Seq(qseq).reverse_complement())
+        # 1. Calculate number of mismatches between wt and sg
+        mm_count = sum(1 for w, s in zip(wt, sg) if w != s)
 
-        # Coordinates of the hit in the reference genome
-        ref_chr   = aln.reference_name
-        ref_start = aln.reference_start
-        ref_end   = aln.reference_end
-        ref_mid   = ref_start + (ref_end - ref_start) // 2 # May not be required under new write up, consider removal
+        # 2. Determine differences between the found PAM and 'GG'
+        if pam[0] != 'G':
+            mm_count += 1
+        if pam[1] != 'G':
+            mm_count += 1
 
-        records.append({
-            "name"         : aln.query_name + "_" + str(hit_counter[aln.query_name]),
-            "protospacer"  : qseq,
-            "protospacerID" : aln.query_name,
-            # reference genome coordinates for synteny
-            "ref_chr"      : ref_chr,
-            "ref_start"    : ref_start,
-            "ref_end"      : ref_end,
-            "ref_midpoint" : ref_mid
-        })
-
-        # create bed entry of mapped coord to facilitate reference sequence extraction
-        bed_rows.append([
-            aln.reference_name,
-            aln.reference_start,
-            aln.reference_end,
-            name,
-            0,
-            "-" if aln.is_reverse else "+"
+        results.append([
+            name, qseq, qname, ref_chr,
+            ref_start, ref_end,
+            genomic_seq, wt, pam, sg, cfd,
+            mm_count
         ])
 
-    # -------------------------
-    # prep bed out
-    # -------------------------
-
-    bed_df = pd.DataFrame(bed_rows)
-
-    ## This is implemented as below to prevent a race condition when run in parallel
-    with tempfile.TemporaryDirectory() as tmpdir: 
-
-        tmpdir = Path(tmpdir)
-
-        bed_path = tmpdir / "targets.bed"
-        fasta_out = tmpdir / "targets.fasta"
-        bed_df.to_csv(
-            bed_path,
-            sep="\t",
-            index=False,
-            header=False
-        )
-
-        # -------------------------
-        # Run bedtools
-        # -------------------------
-        ## the limitation of this approach is that we lose ambiguity awareness
-        ## this means that N can be introduced into sequence info if it's recorded as such in the reference genome
-        ## this could be from true ambiguity in ref or Poly N scars from scaffolding the reference
-
-        subprocess.run([
-            "bedtools",
-            "getfasta",
-            "-fi", fastafile,
-            "-bed", str(bed_path),
-            "-s",
-            "-name",
-            "-fo", str(fasta_out) 
-        ], check=True)
-
-
-        # -------------------------
-        # Load FASTA output
-        # -------------------------
-        fasta_df = load_fasta_strip_coords(fasta_out)
-
-    # -------------------------
-    # Merge protospacers + WT
-    # -------------------------
-    summary_df = pd.DataFrame(records)
-    master = summary_df.merge(fasta_df, on="name")
-
-    # -------------------------
-    # Extract WT, PAM, SG for CFD
-    # -------------------------
-    # ASSUMPTION:
-    # genome_target is 23 bp: 20 bp protospacer + NGG PAM
-    # indices correspond to SpCas9 targeting (Doench et al.)
-
-    master["wt"]  = master["genome_target"].str[:20]
-    master["pam"] = master["genome_target"].str[21:23]
-    master["sg"]  = master["protospacer"].str[:20]
-
-    ## skip if N is in target / guide
-    wt_N_mask = master["wt"].str.contains("N")
-    sg_N_mask = master["sg"].str.contains("N")
-    pam_N_mask = master["pam"].str.contains("N")
-
-    print(f"Skipped {wt_N_mask.sum()} ambiguous WT rows.")
-    print(f"Skipped {sg_N_mask.sum()} ambiguous SG rows.")
-    print(f"Skipped {pam_N_mask.sum()} ambiguous PAM rows.")
-
-    master = master[~wt_N_mask & ~sg_N_mask & ~pam_N_mask].copy()
-
-    mm_scores, pam_scores = get_mm_pam_scores(mismatch_scores, pam_scores)
-
-    master["CFD"] = master.apply(
-        lambda r: calc_cfd(r.wt, r.sg, r.pam, mm_scores, pam_scores),
-        axis=1
-    )
-
-    # -------------------------
-    # Save output
-    # -------------------------
-    master.to_csv(outfile, index=False)
-    # ------------------------------------------------
-    # Write lost PAMs table
-    # ------------------------------------------------
-    if lost_pams:
-        lost_df = pd.DataFrame(lost_pams)
-        lost_out = outfile.replace(".csv", "_lostPAMs.csv")
-        lost_df.to_csv(lost_out, index=False)
-        print(f"[INFO] Wrote {len(lost_df)} lost PAMs → {lost_out}")
-
-    return master
-
+    return results, skipped
 
 ############################################################
-# Run from command line
+# Main Dispatcher
+############################################################
+
+def compute_cfd_parallel(samfile, fastafile, outfile, mismatch_scores, pam_scores, threads, chunk_size=50000):
+    sam = pysam.AlignmentFile(samfile)
+    hit_counter = defaultdict(int)
+    
+    lost_pams = []
+    total_skipped = {'wt': 0, 'sg': 0, 'pam': 0}
+
+    # Set up the worker pool
+    pool = mp.Pool(
+        processes=threads,
+        initializer=worker_init,
+        initargs=(fastafile, mismatch_scores, pam_scores)
+    )
+
+    def read_generator():
+        """Generator to pack SAM records into chunks of primitive data."""
+        chunk = []
+        for aln in sam:
+            if aln.is_unmapped or aln.reference_start is None or aln.reference_end is None:
+                lost_pams.append({
+                    "name": aln.query_name,
+                    "protospacer": aln.query_sequence,
+                    "note": "unmapped/malformed"
+                })
+                continue
+            
+            hit_counter[aln.query_name] += 1
+            name = f"{aln.query_name}_{hit_counter[aln.query_name]}"
+            
+            qseq = aln.query_sequence
+            if aln.is_reverse: 
+                qseq = str(Seq(qseq).reverse_complement())
+                
+            # Append pure primitive types (no pysam objects)
+            chunk.append((
+                name, qseq, aln.query_name, aln.is_reverse, 
+                aln.reference_name, aln.reference_start, aln.reference_end
+            ))
+
+            if len(chunk) >= chunk_size:
+                yield chunk
+                chunk = []
+        
+        # Yield the final partial chunk
+        if chunk:
+            yield chunk
+
+    # Stream out results
+    with open(outfile, 'w', newline='') as out_f:
+        writer = csv.writer(out_f)
+        writer.writerow([
+            "name", "protospacer", "protospacerID", "ref_chr",
+            "ref_start", "ref_end",
+            "genome_target", "wt", "pam", "sg", "CFD", 
+            "mismatches"
+        ])
+
+        # imap_unordered yields results as soon as any worker finishes a chunk
+        for chunk_results, skipped_counts in pool.imap_unordered(process_chunk, read_generator()):
+            writer.writerows(chunk_results)
+            
+            # Aggregate skipped metrics
+            total_skipped['wt'] += skipped_counts['wt']
+            total_skipped['sg'] += skipped_counts['sg']
+            total_skipped['pam'] += skipped_counts['pam']
+
+    pool.close()
+    pool.join()
+
+    print(f"Skipped {total_skipped['wt']} ambiguous WT rows.")
+    print(f"Skipped {total_skipped['sg']} ambiguous SG rows.")
+    print(f"Skipped {total_skipped['pam']} ambiguous PAM rows.")
+
+    if lost_pams:
+        lost_out = str(outfile).replace(".csv", "_lostPAMs.csv")
+        with open(lost_out, 'w', newline='') as f:
+            dict_writer = csv.DictWriter(f, fieldnames=["name", "protospacer", "note"])
+            dict_writer.writeheader()
+            dict_writer.writerows(lost_pams)
+        print(f"[INFO] Wrote {len(lost_pams)} lost PAMs → {lost_out}")
+
+############################################################
+# Execution
 ############################################################
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Compute CFD scores (Doench et al.) for CRISPR protospacer-genome alignments.",
-        epilog="Example: python compute_CFD.py -s alignments.sam -f reference.fa -o cfd_results.csv",
+        description="Compute CFD scores (Doench et al.) for CRISPR alignments using multiprocessing.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
 
-    parser.add_argument(
-        "-s", "--sam",
-        required=True,
-        type=Path,
-        help="Path to the input SAM file containing protospacer alignments."
-    )
-    parser.add_argument(
-        "-f", "--fasta",
-        required=True,
-        type=Path,
-        help="Path to the reference genome FASTA file. (Ensure it is indexed with .fai)."
-    )
-    parser.add_argument(
-        "-o", "--out",
-        required=True,
-        type=Path,
-        help="Path to the output CSV file for CFD scores."
-    )
-
-    parser.add_argument(
-    "--mismatch-scores",
-    required=True,
-    type=Path,
-    help="Path to mismatch_score.pkl"
-    )
-
-    parser.add_argument(
-    "--pam-scores",
-    required=True,
-    type=Path,
-    help="Path to pam_scores.pkl"
-    )
+    parser.add_argument("-s", "--sam", required=True, type=Path)
+    parser.add_argument("-f", "--fasta", required=True, type=Path)
+    parser.add_argument("-o", "--out", required=True, type=Path)
+    parser.add_argument("--mismatch-scores", required=True, type=Path)
+    parser.add_argument("--pam-scores", required=True, type=Path)
+    
+    # New parallelization arguments
+    parser.add_argument("-t", "--threads", type=int, default=mp.cpu_count(),
+                        help="Number of CPU cores to use. Defaults to all available.")
+    parser.add_argument("-c", "--chunk-size", type=int, default=50000,
+                        help="Number of alignments to pass to a worker at once.")
 
     args = parser.parse_args()
 
-    # Fail early: Check if input files actually exist before spinning up any processes
-    if not args.sam.exists():
-        sys.exit(f"[FATAL] SAM file not found at: {args.sam}")
-    if not args.fasta.exists():
-        sys.exit(f"[FATAL] FASTA file not found at: {args.fasta}")
-    if not args.mismatch_scores.exists():
-        sys.exit(f"[FATAL] mismatch score file not found at: {args.mismatch_scores}")
-    if not args.pam_scores.exists():
-        sys.exit(f"[FATAL] PAM score file not found at: {args.pam_scores}")
+    if not args.sam.exists(): sys.exit(f"[FATAL] SAM missing: {args.sam}")
+    if not args.fasta.exists(): sys.exit(f"[FATAL] FASTA missing: {args.fasta}")
 
-    print(f"[INFO] Initializing CFD calculation...")
-    print(f"[INFO] SAM:   {args.sam}")
-    print(f"[INFO] FASTA: {args.fasta}")
-    print("-" * 40)
-
-    # Execute the workflow (casting Paths back to strings for pysam/bedtools compatibility)
-    compute_cfd_from_sam(
-        str(args.sam),
-        str(args.fasta),
-        str(args.out),
-        str(args.mismatch_scores),
-        str(args.pam_scores)
-    )
+    print(f"[INFO] SAM: {args.sam} | FASTA: {args.fasta}")
+    print(f"[INFO] Initiating parallel compute pool across {args.threads} threads...")
     
-    print(f"\n[INFO] CFD results successfully saved to: {args.out}")
+    compute_cfd_parallel(
+        str(args.sam), str(args.fasta), str(args.out),
+        str(args.mismatch_scores), str(args.pam_scores),
+        args.threads, args.chunk_size
+    )
+
+    print(f"\n[INFO] Complete. Output saved to: {args.out}")
 
 if __name__ == "__main__":
     main()
