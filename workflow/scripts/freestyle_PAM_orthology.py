@@ -13,6 +13,8 @@ import seaborn as sns
 import argparse
 from pathlib import Path
 import pandas as pd
+import os
+import gc
 
 
 def parse_args():
@@ -166,37 +168,82 @@ def compare_pams_by_block(ref_df, qry_df, block_col="syntenic_block"):
     return pd.DataFrame(rows)
 
 
-def plot_cfd_shifts(ref_df, qry_df, output_dir, merge_col="protospacerID"):
-    # Inner merge to look strictly at conserved PAMs
-    conserved = ref_df.merge(qry_df, on=merge_col, suffixes=('_ref', '_qry'))
+def merge_by_block_to_disk(ref_df, qry_df, temp_csv, merge_col="protospacerID"):
+    print("[INFO] Setting up block-wise merge...")
     
-    # Calculate delta CFD (Query - Reference)
+    # 1. Drop rows that don't belong to a syntenic block to save time
+    ref_df = ref_df.dropna(subset=['syntenic_block'])
+    qry_df = qry_df.dropna(subset=['syntenic_block'])
+    
+    # 2. THE FIX: Explode lists into separate rows so they are hashable strings
+    ref_df = ref_df.explode('syntenic_block')
+    qry_df = qry_df.explode('syntenic_block')
+
+    # 3. Group the dataframes ONCE (This is the secret to making it fast)
+    ref_grouped = ref_df.groupby('syntenic_block')
+    qry_grouped = qry_df.groupby('syntenic_block')
+    
+    first_chunk = True
+    
+    # 3. Iterate through the blocks and merge the tiny sub-dataframes
+
+    for block_name, ref_sub in ref_grouped:
+        # Check if the query genome also has this block
+        if block_name in qry_grouped.groups:
+            qry_sub = qry_grouped.get_group(block_name)
+            
+            # Merge the two subsets
+            merged_sub = ref_sub.merge(qry_sub, on=merge_col, suffixes=('_ref', '_qry'))
+            
+            # Write to disk: 'w' for the first chunk to create the file, 'a' to append the rest
+            merged_sub.to_csv(
+                temp_csv, 
+                mode='w' if first_chunk else 'a', 
+                header=first_chunk, 
+                index=False
+            )
+            first_chunk = False
+
+    print(f"[INFO] Block-wise merge complete. Temporary data written to {temp_csv}")
+
+def plot_cfd_shifts(temp_csv, output_dir):
+
+    print("[INFO] Loading merged data for vectorized math...")
+    # Load the merged CSV. This is safe because it only contains the shared rows now.
+    conserved = pd.read_csv(temp_csv)
+    
+    # Your vectorized math
     conserved['delta_CFD'] = conserved['CFD_qry'] - conserved['CFD_ref']
     
+    print("[INFO] Rendering CFD plot...")
     plt.figure(figsize=(8, 6))
     
-    # Use seaborn for a clean, publication-ready histogram
     sns.histplot(
         data=conserved, 
         x='delta_CFD', 
         bins=50, 
-        color='#7b85ba', # Matches the purple-ish hue from your poster
+        color='#7b85ba', 
         edgecolor='black',
-        log_scale=(False, True) # Log scale only on the y-axis
+        log_scale=(False, True) 
     )
     
-    # Formatting
     plt.title("Distribution of CFD Shifts for Conserved PAMs", pad=15)
     plt.xlabel(r'$\Delta$CFD (BL54591 - ISO1)', fontsize=12)
     plt.ylabel('Count (Log Scale)', fontsize=12)
-    
-    # Add a subtle grid for readability
     plt.grid(axis='y', linestyle='--', alpha=0.7)
     plt.xlim(-1.05, 1.05)
     
     plt.tight_layout()
     output = output_dir / "cfd_shift.png"
     plt.savefig(output)
+    plt.close()
+    
+    # Clean up the temporary file so we don't leave trash on the drive
+    if temp_csv.exists():
+        os.remove(temp_csv)
+    
+    del conserved
+    gc.collect()
 
 def plot_mismatch_distribution(ref_df, qry_df, output_dir):
     # Count occurrences of each NM (mismatch) value
@@ -241,7 +288,7 @@ def plot_venn(summary, output_dir):
     # Plot the aggregated, block-aware Venn diagram
     # Bumped figure size slightly to accommodate the extra text lines
 
-        # Aggregate absolute counts across all syntenic blocks
+    # Aggregate absolute counts across all syntenic blocks
     total_ref_only = summary["n_ref_only_pams"].sum()
     total_qry_only = summary["n_qry_only_pams"].sum()
     total_shared = summary["n_syntenic_pams"].sum()
@@ -303,8 +350,19 @@ def main():
     qry_no_synteny = qry_df["syntenic_block"].isna().sum()
     print(f"Diagnostics — No synteny detected: {ref_no_synteny} Ref PAMs, {qry_no_synteny} Query PAMs.")
 
-    #plot_venn(summary, output_dir = args.figures)
+    plot_venn(summary, output_dir = args.figures)
     plot_mismatch_distribution(ref_df, qry_df, output_dir = args.figures)
+
+    temp_csv = args.out / "temp_merged_pams.csv"
+    
+    # Execute your chunked merge strategy
+    merge_by_block_to_disk(ref_df, qry_df, temp_csv)
+    
+    # Nuke the original heavy dataframes from RAM -- 64 Gb system ram does not handle drosophila sized comparisons if we aren't careful
+    del ref_df
+    del qry_df
+    gc.collect()
+
     plot_cfd_shifts(ref_df, qry_df, output_dir = args.figures)
 
 if __name__ == "__main__":

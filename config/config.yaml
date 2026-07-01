@@ -16,6 +16,7 @@ euchromatin_bed: "config/euchromatin_boundaries.bed"
 
 # Alignment Parameters
 bowtie_mismatches: 3
+max_hits: 10
 
 cfd:
   mismatch_scores: "data/scoring_parameters/mismatch_score.pkl"

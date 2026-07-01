@@ -9,8 +9,9 @@ def get_pam_fasta(wildcards):
 
 rule all:
     input:
-        #"results/07_summary/pam_summary.csv",
         "results/07_summary/pam_orthology_summary.csv"
-        #"results/04_synteny/ISO1_BL54591.delta" works up to here for sure
 
-include: "rules/analysis.smk"
+# Import the modules
+include: "rules/preliminaries.smk"
+include: "rules/mapping.smk"
+include: "rules/scoring.smk"
