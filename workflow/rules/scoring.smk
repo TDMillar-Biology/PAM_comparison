@@ -65,5 +65,5 @@ rule classify_pam_orthology:
             --delta {input.delta} \
             --out {output.summary} \
             --figures {output.figures} \
-            --tol 1000
+            --tol 10_000_000
         """

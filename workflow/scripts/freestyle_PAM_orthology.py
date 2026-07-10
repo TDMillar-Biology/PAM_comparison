@@ -31,7 +31,6 @@ def parse_args():
     parser.add_argument("--tol",type=int,default=1000,help="Maximum bp distance between projected ref midpoint and query midpoint")
     parser.add_argument("--include-query-only",action="store_true",help="Also emit diagnostic rows for query hits in a block lacking same-ID ref hits")
 
-
     args = parser.parse_args()
 
     path_obj = Path(args.figures)
@@ -50,6 +49,28 @@ REQUIRED_CFD_COLUMNS = {
     "ref_end",
 }
 
+def build_projection_models(primary_alns):
+    print("[INFO] Extracting linear projection models from syntenic blocks...")
+    block_models = {}
+
+    for aln in primary_alns.values():
+        tree = aln.reference_synteny_tree
+        if not tree:
+            continue
+            
+        for interval in tree:
+            block = interval.data
+            b_id = block_id(block)
+            
+            if b_id not in block_models:
+                # Directly grab the pre-calculated attributes
+                block_models[b_id] = {
+                    'm': block.slope, 
+                    'b': block.y_intercept
+                }
+
+    return block_models
+
 def load_cfd_table(path: str) -> pd.DataFrame:
     # 1. Define types upfront to bypass inference and memory copies
     dtypes = {
@@ -64,6 +85,9 @@ def load_cfd_table(path: str) -> pd.DataFrame:
     missing = REQUIRED_CFD_COLUMNS - set(df.columns)
     if missing:
         raise ValueError(f"{path} CFD table is missing columns: {sorted(missing)}")
+    
+    # Vectorized midpoint calculation across the entire dataframe
+    df["midpoint"] = (df["ref_start"] + df["ref_end"]) / 2.0
 
     # 2. Vectorized string ops (already good, just kept clean)
     if "name" not in df.columns:
@@ -77,9 +101,8 @@ def load_cfd_table(path: str) -> pd.DataFrame:
 def block_id(block):
     return f"{block.reference}_{block.query}_{block.index}"
 
-
 def assign_synteny(df, trees):
-    # Depending on your memory constraints, you might want to drop df.copy() 
+    # Depending on memory constraints, we might want to drop df.copy() 
     # here and just assign the new lists directly to the incoming df.
     df_out = df.copy() 
 
@@ -134,32 +157,47 @@ def pam_sets_by_block(df, block_col="syntenic_block", pam_col="protospacerID"):
            .to_dict()
     )
 
-def compare_pams_by_block(ref_df, qry_df, block_col="syntenic_block"):
+def compare_pams_by_block(ref_df, qry_df, block_models, tol, block_col="syntenic_block"):
     ref_sets = pam_sets_by_block(ref_df, block_col=block_col)
     qry_sets = pam_sets_by_block(qry_df, block_col=block_col)
 
-    rows = []
+    # Fast O(1) lookups using the pre-calculated vectorized column
+    ref_mids = dict(zip(ref_df['protospacerID'], ref_df['midpoint']))
+    qry_mids = dict(zip(qry_df['protospacerID'], qry_df['midpoint']))
 
-    all_blocks = set(ref_sets) | set(qry_sets) # set of all observed blocks in qry and ref
+    rows = []
+    all_blocks = set(ref_sets) | set(qry_sets) 
 
     for block in all_blocks:
         ref_pams = ref_sets.get(block, set())
         qry_pams = qry_sets.get(block, set())
 
-        shared = ref_pams & qry_pams
-        ref_only = ref_pams - qry_pams
-        qry_only = qry_pams - ref_pams
+        potential_shared = ref_pams & qry_pams
+        shared = set()
+        
+        model = block_models.get(block)
+        for pam in potential_shared:
+            if model and model['m'] != 0:
+                m, b = model['m'], model['b']
+                # Project query coordinate onto reference space
+                # THIS HERE NEEDS SOME ATTENTION
+                ref_proj = (qry_mids[pam] - b) / m
+                
+                if abs(ref_mids[pam] - ref_proj) <= tol:
+                    shared.add(pam)
+            else:
+                shared.add(pam) 
+
+        ref_only = ref_pams - shared
+        qry_only = qry_pams - shared
 
         rows.append({
             "syntenic_block": block,
-
             "n_ref_pams": len(ref_pams),
             "n_qry_pams": len(qry_pams),
-
             "n_syntenic_pams": len(shared),
             "n_ref_only_pams": len(ref_only),
             "n_qry_only_pams": len(qry_only),
-
             "syntenic_pams": sorted(shared),
             "ref_only_pams": sorted(ref_only),
             "qry_only_pams": sorted(qry_only),
@@ -167,35 +205,34 @@ def compare_pams_by_block(ref_df, qry_df, block_col="syntenic_block"):
 
     return pd.DataFrame(rows)
 
-
-def merge_by_block_to_disk(ref_df, qry_df, temp_csv, merge_col="protospacerID"):
-    print("[INFO] Setting up block-wise merge...")
+def merge_by_block_to_disk(ref_df, qry_df, temp_csv, block_models, tol, merge_col="protospacerID"):
+    print("[INFO] Setting up block-wise merge with spatial tolerance...")
     
-    # 1. Drop rows that don't belong to a syntenic block to save time
-    ref_df = ref_df.dropna(subset=['syntenic_block'])
-    qry_df = qry_df.dropna(subset=['syntenic_block'])
-    
-    # 2. THE FIX: Explode lists into separate rows so they are hashable strings
-    ref_df = ref_df.explode('syntenic_block')
-    qry_df = qry_df.explode('syntenic_block')
+    ref_df = ref_df.dropna(subset=['syntenic_block']).explode('syntenic_block')
+    qry_df = qry_df.dropna(subset=['syntenic_block']).explode('syntenic_block')
 
-    # 3. Group the dataframes ONCE (This is the secret to making it fast)
     ref_grouped = ref_df.groupby('syntenic_block')
     qry_grouped = qry_df.groupby('syntenic_block')
     
     first_chunk = True
     
-    # 3. Iterate through the blocks and merge the tiny sub-dataframes
-
     for block_name, ref_sub in ref_grouped:
-        # Check if the query genome also has this block
         if block_name in qry_grouped.groups:
             qry_sub = qry_grouped.get_group(block_name)
-            
-            # Merge the two subsets
             merged_sub = ref_sub.merge(qry_sub, on=merge_col, suffixes=('_ref', '_qry'))
             
-            # Write to disk: 'w' for the first chunk to create the file, 'a' to append the rest
+            # Apply the projection tolerance filter using pre-calculated midpoints
+            if not merged_sub.empty and block_name in block_models:
+                m, b = block_models[block_name]['m'], block_models[block_name]['b']
+                if m != 0:
+                    ref_proj = (merged_sub['midpoint_qry'] - b) / m
+                    dist = (merged_sub['midpoint_ref'] - ref_proj).abs()
+                    
+                    merged_sub = merged_sub[dist <= tol]
+            
+            if merged_sub.empty:
+                continue
+
             merged_sub.to_csv(
                 temp_csv, 
                 mode='w' if first_chunk else 'a', 
@@ -224,6 +261,8 @@ def plot_cfd_shifts(temp_csv, output_dir):
         bins=50, 
         color='#7b85ba', 
         edgecolor='black',
+        linewidth=0.5,     # Thins the border so it doesn't overpower the color
+        shrink=0.9,        # Creates a 10% gap between each bar
         log_scale=(False, True) 
     )
     
@@ -240,7 +279,8 @@ def plot_cfd_shifts(temp_csv, output_dir):
     
     # Clean up the temporary file so we don't leave trash on the drive
     if temp_csv.exists():
-        os.remove(temp_csv)
+        pass
+        #os.remove(temp_csv)
     
     del conserved
     gc.collect()
@@ -336,13 +376,15 @@ def main():
     resolve_synteny(primary_alignments=primary_alns, breakpoint_map=None)
     # aln objs now have .reference_synteny_tree and .query_synteny_tree attributes
 
+    blocks_dictionary = build_projection_models(primary_alns)
+
     reference_trees = {aln.reference: aln.reference_synteny_tree for aln in primary_alns.values()}
     query_trees = {aln.query: aln.query_synteny_tree for aln in primary_alns.values()}
 
-    ref_df = assign_synteny(ref_cfd, reference_trees)
+    ref_df = assign_synteny(ref_cfd, reference_trees) ## assign synteny information to each 23mer
     qry_df = assign_synteny(qry_cfd, query_trees)
 
-    summary = compare_pams_by_block(ref_df, qry_df)
+    summary = compare_pams_by_block(ref_df, qry_df, blocks_dictionary, args.tol)
     summary.to_csv(args.out)
 
     # Diagnostic tally for PAMs falling completely outside blocks
@@ -353,17 +395,17 @@ def main():
     plot_venn(summary, output_dir = args.figures)
     plot_mismatch_distribution(ref_df, qry_df, output_dir = args.figures)
 
-    temp_csv = args.out / "temp_merged_pams.csv"
+    temp_csv = args.out.parent / "temp_merged_pams.csv"
     
     # Execute your chunked merge strategy
-    merge_by_block_to_disk(ref_df, qry_df, temp_csv)
+    merge_by_block_to_disk(ref_df, qry_df, temp_csv, blocks_dictionary, args.tol)
     
     # Nuke the original heavy dataframes from RAM -- 64 Gb system ram does not handle drosophila sized comparisons if we aren't careful
     del ref_df
     del qry_df
     gc.collect()
 
-    plot_cfd_shifts(ref_df, qry_df, output_dir = args.figures)
+    plot_cfd_shifts(temp_csv, output_dir=args.figures)
 
 if __name__ == "__main__":
     main()
