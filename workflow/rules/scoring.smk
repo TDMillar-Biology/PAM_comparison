@@ -59,11 +59,11 @@ rule classify_pam_orthology:
         runtime = 60
     shell:
         """
-        python3 workflow/scripts/freestyle_PAM_orthology.py \
+        python3 workflow/scripts/PAM_orthology_candidate.py \
             --ref-cfd {input.ref_cfd} \
             --query-cfd {input.qry_cfd} \
             --delta {input.delta} \
             --out {output.summary} \
             --figures {output.figures} \
-            --tol 10_000_000
+            --tol 10_000
         """
