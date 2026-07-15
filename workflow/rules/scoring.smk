@@ -44,7 +44,7 @@ rule compute_cfd_bl:
             --pam-scores {input.pam_scores}
         """
 
-rule classify_pam_orthology:
+rule classify_pam_orthology: ##candidate for removal
     input:
         ref_cfd = "results/06_cfd_scores/iso1_raw_cfd.csv",
         qry_cfd = "results/06_cfd_scores/bl_raw_cfd.csv",
@@ -66,4 +66,55 @@ rule classify_pam_orthology:
             --out {output.summary} \
             --figures {output.figures} \
             --tol 10_000
+        """
+
+rule map_pam_orthology:
+    input:
+        ref_cfd = "results/06_cfd_scores/iso1_raw_cfd.csv",
+        qry_cfd = "results/06_cfd_scores/bl_raw_cfd.csv",
+        delta = "results/04_synteny/ISO1_BL54591.delta"
+    output:
+        conserved = "results/07_summary/conserved_pams.csv",
+        failed = "results/07_summary/failed_tolerance_pams.csv",
+        unmapped_ref = "results/07_summary/unmapped_ref.csv",
+        unmapped_qry = "results/07_summary/unmapped_qry.csv"
+    params:
+        out_dir = "results/07_summary",
+        tol = 10000
+    conda:
+        "../envs/PAM_orthology.yaml"
+    resources:
+        mem_mb = 16000,
+        runtime = 60
+    shell:
+        """
+        python3 workflow/scripts/synteny_mapper.py \
+            --ref-cfd {input.ref_cfd} \
+            --query-cfd {input.qry_cfd} \
+            --delta {input.delta} \
+            --out-dir {params.out_dir} \
+            --tol {params.tol}
+        """
+
+rule plot_synteny_diagnostics:
+    input:
+        # Tying these as inputs guarantees this won't run until the mapper finishes successfully
+        conserved = "results/07_summary/conserved_pams.csv",
+        failed = "results/07_summary/failed_tolerance_pams.csv",
+        unmapped_ref = "results/07_summary/unmapped_ref.csv",
+        unmapped_qry = "results/07_summary/unmapped_qry.csv"
+    output:
+        figures = directory("results/08_figures")
+    params:
+        data_dir = "results/07_summary"
+    conda:
+        "../envs/PAM_orthology.yaml"
+    resources:
+        mem_mb = 16000,  # Dropped significantly since we aren't holding interval trees in RAM
+        runtime = 15
+    shell:
+        """
+        python3 workflow/scripts/synteny_plotter.py \
+            --data-dir {params.data_dir} \
+            --figures {output.figures}
         """

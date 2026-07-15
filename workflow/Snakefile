@@ -9,7 +9,11 @@ def get_pam_fasta(wildcards):
 
 rule all:
     input:
-        "results/07_summary/pam_orthology_summary.csv"
+        # The main data output
+        "results/07_summary/conserved_pams.csv",
+        
+        # The visualization output (this triggers the plotter, which triggers the mapper)
+        "results/08_figures"
 
 # Import the modules
 include: "rules/preliminaries.smk"

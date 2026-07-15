@@ -324,6 +324,57 @@ def plot_cfd_shifts(temp_csv, output_dir):
     del conserved
     gc.collect()
 
+def plot_tolerance_venns(ref_df, qry_df, output_dir):
+    tolerances = [1000, 10000, 100000, 1000000]
+    
+    # Create a 2x2 grid for the plots
+    fig, axes = plt.subplots(2, 2, figsize=(20, 20))
+    axes = axes.flatten()
+    
+    for i, tol in enumerate(tolerances):
+        print(f"[INFO] Calculating overlaps for tolerance: ±{tol:,} bp")
+        
+        # We can reuse your existing comparison function here
+        summary, _ = compare_pams_by_block(ref_df, qry_df, tol)
+        
+        # Apply the strict deduplication logic
+        shared_set = set(pam for sublist in summary["syntenic_pams"] for pam in sublist)
+        ref_only_set = set(pam for sublist in summary["ref_only_pams"] for pam in sublist)
+        qry_only_set = set(pam for sublist in summary["qry_only_pams"] for pam in sublist)
+
+        true_ref_only = len(ref_only_set - shared_set)
+        true_qry_only = len(qry_only_set - shared_set)
+        true_shared = len(shared_set)
+        
+        # Plot to the specific subplot axis
+        v = venn2(
+            subsets=(true_ref_only, true_qry_only, true_shared),
+            set_labels=("Reference PAMs", "Query PAMs"),
+            ax=axes[i]
+        )
+        
+        total_pams = true_ref_only + true_qry_only + true_shared
+        subset_data = {'10': true_ref_only, '01': true_qry_only, '11': true_shared}
+        
+        # Dress up the labels with comma formatting and percentages
+        for subset_id, value in subset_data.items():
+            label = v.get_label_by_id(subset_id)
+            if label:
+                pct = (value / total_pams) * 100
+                label.set_text(f"{value:,}\n({pct:.1f}%)")
+                label.set_fontsize(11)
+                
+        # Title each subplot with its specific tolerance
+        axes[i].set_title(f"Tolerance: ±{tol:,} bp", fontsize=14, pad=10)
+
+    # Add a master title to the entire figure
+    plt.suptitle("Block-Aware PAM Conservation Across Spatial Tolerances", fontsize=18, y=0.95)
+    
+    plt.tight_layout(rect=[0, 0, 1, 0.93]) # Adjust layout to fit the suptitle
+    output = output_dir / "multi_tolerance_venn.png"
+    plt.savefig(output)
+    plt.close()
+
 def plot_mismatch_distribution(ref_df, qry_df, output_dir):
     ref_counts = ref_df['mismatches'].value_counts().sort_index()
     qry_counts = qry_df['mismatches'].value_counts().sort_index()
@@ -358,23 +409,30 @@ def plot_mismatch_distribution(ref_df, qry_df, output_dir):
     plt.close()
 
 def plot_venn(summary, output_dir):
-    total_ref_only = summary["n_ref_only_pams"].sum()
-    total_qry_only = summary["n_qry_only_pams"].sum()
-    total_shared = summary["n_syntenic_pams"].sum()
-    
+    # 1. Flatten the lists of IDs into global sets to eliminate double-counting
+    shared_set = set(pam for sublist in summary["syntenic_pams"] for pam in sublist)
+    ref_only_set = set(pam for sublist in summary["ref_only_pams"] for pam in sublist)
+    qry_only_set = set(pam for sublist in summary["qry_only_pams"] for pam in sublist)
+
+    # 2. Enforce global categorization
+    # If a PAM was shared in one block, it cannot be considered "only" in another
+    true_ref_only = len(ref_only_set - shared_set)
+    true_qry_only = len(qry_only_set - shared_set)
+    true_shared = len(shared_set)
+
     plt.figure(figsize=(8, 8)) 
     
     v = venn2(
-        subsets=(total_ref_only, total_qry_only, total_shared),
+        subsets=(true_ref_only, true_qry_only, true_shared),
         set_labels=("Reference PAMs", "Query PAMs")
     )
 
-    total_pams = total_ref_only + total_qry_only + total_shared
+    total_pams = true_ref_only + true_qry_only + true_shared
 
     subset_data = {
-        '10': total_ref_only,
-        '01': total_qry_only,
-        '11': total_shared
+        '10': true_ref_only,
+        '01': true_qry_only,
+        '11': true_shared
     }
 
     for subset_id, value in subset_data.items():
@@ -384,7 +442,7 @@ def plot_venn(summary, output_dir):
             label.set_text(f"{value:,}\n({pct:.1f}%)")
             label.set_fontsize(11)
 
-    plt.title("Block-Aware PAM Conservation\n(Aggregated across all syntenic blocks)")
+    plt.title("Unique PAM Conservation\n(Deduplicated across all syntenic blocks)")
     plt.tight_layout()
     output = output_dir / "venn_diagram.png"
     plt.savefig(output)
@@ -443,6 +501,7 @@ def main():
     print(f"Diagnostics — No synteny detected: {ref_no_synteny} Ref PAMs, {qry_no_synteny} Query PAMs.")
 
     plot_venn(summary, output_dir = args.figures)
+    plot_tolerance_venns(ref_df, qry_df, output_dir=args.figures)
     plot_mismatch_distribution(ref_df, qry_df, output_dir = args.figures)
 
     temp_csv = args.out.parent / "temp_merged_pams.csv"
