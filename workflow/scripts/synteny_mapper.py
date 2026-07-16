@@ -62,20 +62,27 @@ def merge_and_filter(ref_df, qry_df, out_dir, tol):
     ref_mapped = ref_df.dropna(subset=['syntenic_block'])
     qry_mapped = qry_df.dropna(subset=['syntenic_block'])
 
+    # 1. Perform the merge (this temporarily creates the combinatorial explosion)
     merged = ref_mapped.merge(qry_mapped, on="protospacerID", suffixes=('_ref', '_qry'))
     
-    # Calculate projection distances
+    # 2. Calculate projection distances
     merged['proj_dist'] = (merged['midpoint_qry'] - merged['yhat']).abs()
     
-    # Split based on tolerance
-    conserved = merged[merged['proj_dist'] <= tol]
-    failed_tol = merged[merged['proj_dist'] > tol]
+    # 3. Collapse down to the single best hit per PAM
+    # Sort so the smallest distance is first, then keep only that first row for each ID
+    merged_best = merged.sort_values('proj_dist').drop_duplicates(subset='protospacerID', keep='first')
     
+    # 4. Split based on tolerance using the deduplicated dataframe
+    conserved = merged_best[merged_best['proj_dist'] <= tol]
+    failed_tol = merged_best[merged_best['proj_dist'] > tol]
+    
+    # Optional: You might want to save the "rescued" multi-mappers vs strict 1:1s 
+    # but for your current SVMU benchmarking, this keeps it clean.
     conserved.to_csv(out_dir / "conserved_pams.csv", index=False)
     failed_tol.to_csv(out_dir / "failed_tolerance_pams.csv", index=False)
     
     return conserved, failed_tol
-
+    
 def main():
     args = parse_args()
     ref_cfd = load_cfd_table(args.ref_cfd)

@@ -21,44 +21,29 @@ def plot_chromosome_traces(data_dir, fig_dir):
     unmapped_qry = pd.read_csv(data_dir / "unmapped_qry.csv")
 
     # Get all unique chromosomes present in the reference data
-    chromosomes = pd.concat([conserved['ref_chr_ref'], unmapped_ref['ref_chr']]).dropna().unique()
+    #chromosomes = pd.concat([conserved['ref_chr_ref'], unmapped_ref['ref_chr']]).dropna().unique()
+    import pdb 
+    chromosomes = pd.concat([failed['ref_chr_ref']]).dropna().unique()
+
+    value_counts = conserved['protospacerID'].value_counts()
+    pdb.set_trace()
+    fig, ax = plt.subplots(figsize= (12,10))
+    plt.hist(value_counts)
+    plt.show()
 
     for chrom in chromosomes:
         print(f"[INFO] Rendering trace for {chrom}...")
         fig, ax = plt.subplots(figsize=(12, 10))
         
-        # 1. Plot the unmapped points along the axes
-        chr_unmapped_ref = unmapped_ref[unmapped_ref['ref_chr'] == chrom]
-        chr_unmapped_qry = unmapped_qry[unmapped_qry['ref_chr'] == chrom] # Assuming CFD has ref_chr populated for query
-        
-        ax.scatter(chr_unmapped_ref['midpoint'], np.zeros(len(chr_unmapped_ref)), 
-                   color='grey', marker='|', alpha=0.5, label='Unmapped Ref PAMs (X-axis)')
-        
-        ax.scatter(np.zeros(len(chr_unmapped_qry)), chr_unmapped_qry['midpoint'], 
-                   color='orange', marker='_', alpha=0.5, label='Unmapped Query PAMs (Y-axis)')
+        sub = conserved[conserved['ref_chr_ref'] == chrom]
 
-        # 2. Plot the valid, within-tolerance traces
-        chr_conserved = conserved[conserved['ref_chr_ref'] == chrom]
-        ax.scatter(chr_conserved['midpoint_ref'], chr_conserved['yhat'], 
-                   color='#7b85ba', s=2, alpha=0.8, label='Conserved Trace (Projected)')
+        plt.scatter(sub['midpoint_ref'], sub['midpoint_qry'], color = 'Red', label = 'mapped midpoint - truth')
+        plt.scatter(sub['midpoint_ref'], sub['yhat'], color = 'Blue', label = 'yhat - interpolated')
+        plt.show()
 
-        # 3. Plot the out-of-tolerance misses
-        chr_failed = failed[failed['ref_chr_ref'] == chrom]
-        
-        # Plot projected coordinate (where we expected it)
-        ax.scatter(chr_failed['midpoint_ref'], chr_failed['yhat'], 
-                   color='blue', marker='x', s=15, alpha=0.7, label='Failed: Expected (yhat)')
-        
-        # Plot actual coordinate (where it actually mapped)
-        ax.scatter(chr_failed['midpoint_ref'], chr_failed['midpoint_qry'], 
-                   color='red', marker='+', s=15, alpha=0.7, label='Failed: Actual')
-        
-        # Draw a faint line connecting the expectation to the reality
-        for _, row in chr_failed.iterrows():
-            ax.plot([row['midpoint_ref'], row['midpoint_ref']], 
-                    [row['yhat'], row['midpoint_qry']], 
-                    color='k', linestyle=':', alpha=0.3, linewidth=0.5)
-
+        sub['difference'] = sub['yhat'] - sub['midpoint_qry']
+        plt.hist(sub['yhat'] - sub['midpoint_qry'], bins = 100, log=True)
+        plt.show()
         # Formatting - Keeping absolute terms
         ax.set_title(f"Synteny Trace & Tolerance Diagnostics: Chromosome {chrom}", pad=15)
         ax.set_xlabel("Reference Midpoint (Absolute bp)", fontsize=12)
@@ -72,6 +57,8 @@ def plot_chromosome_traces(data_dir, fig_dir):
         ax.grid(True, linestyle='--', alpha=0.4)
         
         plt.tight_layout()
+        #plt.legend()
+        #plt.show()
         plt.savefig(fig_dir / f"trace_{chrom}.png", dpi=300)
         plt.close()
 

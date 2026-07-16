@@ -44,30 +44,6 @@ rule compute_cfd_bl:
             --pam-scores {input.pam_scores}
         """
 
-rule classify_pam_orthology: ##candidate for removal
-    input:
-        ref_cfd = "results/06_cfd_scores/iso1_raw_cfd.csv",
-        qry_cfd = "results/06_cfd_scores/bl_raw_cfd.csv",
-        delta = "results/04_synteny/ISO1_BL54591.delta"
-    output:
-        summary = "results/07_summary/pam_orthology_summary.csv",
-        figures = directory("results/08_figures")
-    conda:
-        "../envs/PAM_orthology.yaml"
-    resources:
-        mem_mb = 16000,
-        runtime = 60
-    shell:
-        """
-        python3 workflow/scripts/PAM_orthology_candidate.py \
-            --ref-cfd {input.ref_cfd} \
-            --query-cfd {input.qry_cfd} \
-            --delta {input.delta} \
-            --out {output.summary} \
-            --figures {output.figures} \
-            --tol 10_000
-        """
-
 rule map_pam_orthology:
     input:
         ref_cfd = "results/06_cfd_scores/iso1_raw_cfd.csv",
@@ -80,12 +56,9 @@ rule map_pam_orthology:
         unmapped_qry = "results/07_summary/unmapped_qry.csv"
     params:
         out_dir = "results/07_summary",
-        tol = 10000
+        tol = 1000
     conda:
         "../envs/PAM_orthology.yaml"
-    resources:
-        mem_mb = 16000,
-        runtime = 60
     shell:
         """
         python3 workflow/scripts/synteny_mapper.py \
@@ -109,9 +82,6 @@ rule plot_synteny_diagnostics:
         data_dir = "results/07_summary"
     conda:
         "../envs/PAM_orthology.yaml"
-    resources:
-        mem_mb = 16000,  # Dropped significantly since we aren't holding interval trees in RAM
-        runtime = 15
     shell:
         """
         python3 workflow/scripts/synteny_plotter.py \

@@ -72,11 +72,10 @@ def build_projection_models(primary_alns):
     return block_models
 
 def load_cfd_table(path: str) -> pd.DataFrame:
-    # 1. Define types upfront to bypass inference and memory copies
     dtypes = {
         "protospacerID": str,
         "ref_chr": str,
-        "ref_start": int, # Or "Int32" to handle NaN
+        "ref_start": int,
         "ref_end": int,
     }
     
@@ -85,11 +84,10 @@ def load_cfd_table(path: str) -> pd.DataFrame:
     missing = REQUIRED_CFD_COLUMNS - set(df.columns)
     if missing:
         raise ValueError(f"{path} CFD table is missing columns: {sorted(missing)}")
-    
+
     # Vectorized midpoint calculation across the entire dataframe
     df["midpoint"] = (df["ref_start"] + df["ref_end"]) / 2.0
 
-    # 2. Vectorized string ops (already good, just kept clean)
     if "name" not in df.columns:
         df["name"] = df["protospacerID"] + "_row" + df.index.astype(str)
 
