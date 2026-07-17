@@ -75,16 +75,45 @@ rule plot_synteny_diagnostics:
         conserved = "results/07_summary/conserved_pams.csv",
         failed = "results/07_summary/failed_tolerance_pams.csv",
         unmapped_ref = "results/07_summary/unmapped_ref.csv",
-        unmapped_qry = "results/07_summary/unmapped_qry.csv"
+        unmapped_qry = "results/07_summary/unmapped_qry.csv",
+        ref_cfd = "results/06_cfd_scores/iso1_raw_cfd.csv",
+        qry_cfd = "results/06_cfd_scores/bl_raw_cfd.csv"
     output:
         figures = directory("results/08_figures")
+        plot = "results/08_figures/cfd_shift.png"
     params:
-        data_dir = "results/07_summary"
+        data_dir = directory("results/07_summary")
     conda:
         "../envs/PAM_orthology.yaml"
     shell:
         """
         python3 workflow/scripts/synteny_plotter.py \
             --data-dir {params.data_dir} \
-            --figures {output.figures}
+            --figures {output.figures} \
+            --ref-cfd {input.ref_cfd} \
+            --query-cfd {input.qry_cfd}
+        touch placeholder
+        """
+
+rule plot_tolerance_venns:
+    input:
+        ref_cfd = "results/06_cfd_scores/iso1_raw_cfd.csv",
+        qry_cfd = "results/06_cfd_scores/bl_raw_cfd.csv",
+        delta = "results/04_synteny/ISO1_BL54591.delta"
+    output:
+        # Tracking the specific file the script generates ensures 
+        # Snakemake knows exactly when this rule is complete
+        venn_plot = "results/08_figures/multi_tolerance_venn.png"
+    params:
+        # We pass the parent directory to the --figures argument
+        figures_dir = "results/08_figures"
+    conda:
+        "../envs/PAM_orthology.yaml"
+    shell:
+        """
+        python3 workflow/scripts/venn_diagrams.py \
+            --ref-cfd {input.ref_cfd} \
+            --query-cfd {input.qry_cfd} \
+            --delta {input.delta} \
+            --figures {params.figures_dir}
         """

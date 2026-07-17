@@ -10,12 +10,15 @@ def get_pam_fasta(wildcards):
 rule all:
     input:
         # The main data output
-        "results/07_summary/conserved_pams.csv",
-        
+        #"results/07_summary/conserved_pams.csv",
+        "results/08_figures/multi_tolerance_venn.png",
+        "results/08_figures/cfd_shift.png"
+        #"results/07_summary/pam_orthology_summary.csv",
         # The visualization output (this triggers the plotter, which triggers the mapper)
-        "results/08_figures"
+        #"results/08_figures"
 
 # Import the modules
 include: "rules/preliminaries.smk"
 include: "rules/mapping.smk"
 include: "rules/scoring.smk"
+#include: "rules/tmp.smk"

@@ -14,5 +14,6 @@ dependencies:
   - matplotlib-venn
   - pip
   - seaborn
+  - mpld3
   - pip:
     - -e /home/mahullocaladmin/Desktop/svmu2_package ## This is local to my machine, fix for publication
