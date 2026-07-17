@@ -79,7 +79,7 @@ rule plot_synteny_diagnostics:
         ref_cfd = "results/06_cfd_scores/iso1_raw_cfd.csv",
         qry_cfd = "results/06_cfd_scores/bl_raw_cfd.csv"
     output:
-        figures = directory("results/08_figures")
+        figures = directory("results/08_figures"),
         plot = "results/08_figures/cfd_shift.png"
     params:
         data_dir = directory("results/07_summary")
