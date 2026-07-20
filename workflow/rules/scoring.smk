@@ -92,7 +92,6 @@ rule plot_synteny_diagnostics:
             --figures {output.figures} \
             --ref-cfd {input.ref_cfd} \
             --query-cfd {input.qry_cfd}
-        touch placeholder
         """
 
 rule plot_tolerance_venns:

@@ -5,6 +5,7 @@ import argparse
 from pathlib import Path
 import numpy as np
 import gc
+import matplotlib.ticker as ticker
 
 # Note: Since the discovery logic was separated, ensure you import your 
 # synteny functions here if you are still dynamically calling compare_pams_by_block.
@@ -40,8 +41,67 @@ def plot_chromosome_traces(data_dir, fig_dir):
         
         # --- Synteny Trace Scatter Plot ---
         # Kept alpha low and marker size (s) small to help visualize dense regions
+        # 1. Plot the main scatter plot (exactly as you had it)
         ax_trace.scatter(sub['midpoint_ref'], sub['midpoint_qry'], color='red', label='Mapped Midpoint (Truth)', alpha=0.6, s=10)
         ax_trace.scatter(sub['midpoint_ref'], sub['yhat'], color='blue', label='yhat (Interpolated)', alpha=0.6, s=10)
+
+        # 2. Create the inset axes
+        # The coordinates are [x0, y0, width, height] relative to the main axes (0 to 1)
+        # Placing it in the top left (0.1, 0.5) to avoid your main data line
+        axins = ax_trace.inset_axes([0.1, 0.5, 0.35, 0.35])
+
+        # 3. Plot the exact same data on the inset axes
+        # Note: You can optionally increase 's' (marker size) here if you want them highly visible
+        axins.scatter(sub['midpoint_ref'], sub['midpoint_qry'], color='red', alpha=0.4, s=15)
+        axins.scatter(sub['midpoint_ref'], sub['yhat'], color='blue', alpha=0.4, s=15)
+
+        # 4. Define your zoom window
+        zoom_x_center = 10000000
+        window_size = 2500 # 2500 bp window
+
+        x_min = zoom_x_center - (window_size / 2)
+        x_max = zoom_x_center + (window_size / 2)
+
+        # Find the corresponding Y center based on the data in this window
+        window_data = sub[(sub['midpoint_ref'] >= x_min) & (sub['midpoint_ref'] <= x_max)]
+        raw_y_center = window_data['midpoint_qry'].mean()
+        
+        # FIX: Round the mean to the nearest 100 or 500 for clean offset ticks
+        zoom_y_center = round(raw_y_center, -2) # -2 rounds to nearest 100
+
+        # Define the Y limits to keep it perfectly centered around the data
+        y_window = 2500 # Set a fixed window size for Y as well 
+        y_min = zoom_y_center - (y_window / 2)
+        y_max = zoom_y_center + (y_window / 2)
+
+        # 5. Apply the limits to the inset
+        axins.set_xlim(x_min, x_max)
+        axins.set_ylim(y_min, y_max)
+
+        # Force the tick labels to display as offsets (e.g., -100, 0, +100)
+        def format_x_tick(x, pos):
+            return f"{int(x - zoom_x_center):+g}"
+
+        def format_y_tick(y, pos):
+            return f"{int(y - zoom_y_center):+g}"
+
+        axins.xaxis.set_major_formatter(ticker.FuncFormatter(format_x_tick))
+        axins.yaxis.set_major_formatter(ticker.FuncFormatter(format_y_tick))
+
+        # Update labels to indicate these are offsets
+        axins.set_xlabel('Reference Offset (bp)', fontsize=9)
+        axins.set_ylabel('Query Offset (bp)', fontsize=9)
+        axins.tick_params(axis='both', which='major', labelsize=7)
+
+        # Add the center coordinate text to the bottom right
+        # transform=axins.transAxes makes (1,0) the exact bottom right corner of the inset
+        center_text = f"Centered at:\n(10M, {int(zoom_y_center):,})"
+        axins.text(0.95, 0.05, center_text, transform=axins.transAxes, 
+                horizontalalignment='right', verticalalignment='bottom', 
+                fontsize=7, bbox=dict(facecolor='white', alpha=0.6, edgecolor='none'))
+
+        # 6. Draw the magic connecting lines from the inset to the main plot
+        ax_trace.indicate_inset_zoom(axins, edgecolor="black")
         
         # Formatting - Keeping absolute terms
         ax_trace.set_title(f"Synteny Trace: Chromosome {chrom}", pad=15)
@@ -170,6 +230,7 @@ def plot_mismatch_distribution(ref_df, qry_df, output_dir):
     output = output_dir / "mismatch_distribution.png"
     plt.savefig(output)
     plt.close()
+
 
 def main():
     args = parse_args()
