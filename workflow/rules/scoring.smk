@@ -102,7 +102,7 @@ rule plot_tolerance_venns:
     output:
         # Tracking the specific file the script generates ensures 
         # Snakemake knows exactly when this rule is complete
-        venn_plot = "results/08_figures/multi_tolerance_venn.png"
+        sunburst_plot = "results/08_figures/multi_tolerance_sunburst.png"
     params:
         # We pass the parent directory to the --figures argument
         figures_dir = "results/08_figures"

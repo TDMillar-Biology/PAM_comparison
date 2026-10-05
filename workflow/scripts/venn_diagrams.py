@@ -86,22 +86,28 @@ def compare_pams_by_block(ref_df, qry_df, tol, block_col="syntenic_block"):
         ref_pams = ref_sets.get(block, set())
         qry_pams = qry_sets.get(block, set())
         
-        shared = set()
+        shared_within_tolerance = set()
+        shared_exceeds_tolerance = set()
+        
         for pam in ref_pams & qry_pams:
             y_actual = qry_mids[pam]
-            y_proj = ref_yhats[pam]
+            y_proj = ref_yhats.get(pam)
             
-            if y_proj is not None:
-                if abs(y_proj - y_actual) <= tol:
-                    shared.add(pam)
+            # Require a valid projection AND passing the spatial tolerance
+            if y_proj is not None and abs(y_proj - y_actual) <= tol:
+                shared_within_tolerance.add(pam)
             else:
-                shared.add(pam) 
+                # Captures both y_proj is None AND failed tolerance
+                shared_exceeds_tolerance.add(pam) 
 
-        ref_only = ref_pams - shared
-        qry_only = qry_pams - shared
+        # Subtract both shared pools to get true uniques
+        all_shared = shared_within_tolerance | shared_exceeds_tolerance
+        ref_only = ref_pams - all_shared
+        qry_only = qry_pams - all_shared
 
         rows.append({
-            "syntenic_pams": sorted(shared),
+            "shared_within_tolerance_pams": sorted(shared_within_tolerance),
+            "shared_exceeds_tolerance_pams": sorted(shared_exceeds_tolerance),
             "ref_only_pams": sorted(ref_only),
             "qry_only_pams": sorted(qry_only),
         })
@@ -118,36 +124,87 @@ def plot_tolerance_venns(ref_df, qry_df, output_dir):
         
         summary = compare_pams_by_block(ref_df, qry_df, tol)
         
-        shared_set = set(pam for sublist in summary["syntenic_pams"] for pam in sublist)
+        # Flatten the lists of PAMs from the dataframe
+        shared_within_tolerance_set = set(pam for sublist in summary["shared_within_tolerance_pams"] for pam in sublist)
+        shared_exceeds_tolerance_set = set(pam for sublist in summary["shared_exceeds_tolerance_pams"] for pam in sublist)
         ref_only_set = set(pam for sublist in summary["ref_only_pams"] for pam in sublist)
         qry_only_set = set(pam for sublist in summary["qry_only_pams"] for pam in sublist)
 
-        true_ref_only = len(ref_only_set - shared_set)
-        true_qry_only = len(qry_only_set - shared_set)
-        true_shared = len(shared_set)
+        # Since we explicitly subtracted all shared PAMs in the logic, these are already true counts
+        true_ref_only = len(ref_only_set)
+        true_qry_only = len(qry_only_set)
+        true_syntenic = len(shared_within_tolerance_set)
+        true_divergent = len(shared_exceeds_tolerance_set)
         
-        v = venn2(
-            subsets=(true_ref_only, true_qry_only, true_shared),
-            set_labels=("Reference PAMs", "Query PAMs"),
-            ax=axes[i]
+        total_shared = true_syntenic + true_divergent
+        
+        # Calculate total PAMs for percentage breakdowns
+        total_pams = true_ref_only + true_qry_only + total_shared
+
+        # Ensure we are using standard Matplotlib colors
+        cmap = plt.get_cmap("Pastel1")
+        
+        # Define hierarchical data
+        # Inner Ring: Ref Only, Query Only, Total Shared
+        inner_sizes = [true_ref_only, true_qry_only, total_shared]
+        
+        # Keep Ref and Query blank here to avoid center-clustering.
+        # Label 'Shared' centrally inside its large wedge.
+        inner_labels = [
+            "", 
+            "", 
+            f"Shared\n{total_shared:,}\n({(total_shared / total_pams) * 100:.1f}%)"
+        ]
+        inner_colors = [cmap(0), cmap(1), cmap(2)]
+        
+        # Outer Ring: Ref Only, Query Only, Syntenic (Within), Divergent (Exceeds)
+        outer_sizes = [true_ref_only, true_qry_only, true_syntenic, true_divergent]
+        
+        # Move Ref Only and Query Only labels entirely to the outer ring
+        outer_labels = [
+            f"Ref Only\n{true_ref_only:,}\n({(true_ref_only / total_pams) * 100:.1f}%)", 
+            f"Query Only\n{true_qry_only:,}\n({(true_qry_only / total_pams) * 100:.1f}%)", 
+            f"Within Tol.\n{true_syntenic:,}\n({(true_syntenic / total_pams) * 100:.1f}%)", 
+            f"Exceeds Tol.\n{true_divergent:,}\n({(true_divergent / total_pams) * 100:.1f}%)"
+        ]
+        
+        # Match colors to the inner ring, but use slightly different shades for the shared split
+        cmap_shared = plt.get_cmap("Blues")
+        outer_colors = [cmap(0), cmap(1), cmap_shared(0.4), cmap_shared(0.2)]
+
+        # Plot parameters for the rings
+        size = 0.35 # Width of each ring
+        
+        axes[i].clear() # Clear the axis to remove any residual formatting
+        
+        # Draw outer ring
+        axes[i].pie(
+            outer_sizes, 
+            radius=1, 
+            labels=outer_labels, 
+            labeldistance=1.15, # Pushes text completely outside the plot
+            colors=outer_colors, 
+            wedgeprops=dict(width=size, edgecolor='white', linewidth=2),
+            textprops={'fontsize': 10}
         )
-        
-        total_pams = true_ref_only + true_qry_only + true_shared
-        subset_data = {'10': true_ref_only, '01': true_qry_only, '11': true_shared}
-        
-        for subset_id, value in subset_data.items():
-            label = v.get_label_by_id(subset_id)
-            if label:
-                pct = (value / total_pams) * 100
-                label.set_text(f"{value:,}\n({pct:.1f}%)")
-                label.set_fontsize(11)
+
+        # Draw inner ring
+        axes[i].pie(
+            inner_sizes, 
+            radius=1 - size, 
+            labels=inner_labels, 
+            labeldistance=0.75, # Keeps the 'Shared' label nicely centered within its donut slice
+            colors=inner_colors, 
+            wedgeprops=dict(width=size, edgecolor='white', linewidth=2),
+            textprops={'fontsize': 11, 'weight': 'bold'}
+        )
                 
-        axes[i].set_title(f"Tolerance: ±{tol:,} bp", fontsize=14, pad=10)
+        axes[i].set_title(f"Tolerance: ±{tol:,} bp", fontsize=14, pad=30) # Increased padding to accommodate outer text
 
     plt.suptitle("Block-Aware PAM Conservation Across Spatial Tolerances", fontsize=18, y=0.95)
     plt.tight_layout(rect=[0, 0, 1, 0.93]) 
     
-    output = output_dir / "multi_tolerance_venn.png"
+    output = output_dir / "multi_tolerance_sunburst.png"
     plt.savefig(output)
     plt.close()
 

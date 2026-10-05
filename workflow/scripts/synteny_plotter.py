@@ -57,7 +57,7 @@ def plot_chromosome_traces(data_dir, fig_dir):
 
         # 4. Define your zoom window
         zoom_x_center = 10000000
-        window_size = 2500 # 2500 bp window
+        window_size = 1000 # 2500 bp window
 
         x_min = zoom_x_center - (window_size / 2)
         x_max = zoom_x_center + (window_size / 2)
@@ -70,7 +70,7 @@ def plot_chromosome_traces(data_dir, fig_dir):
         zoom_y_center = round(raw_y_center, -2) # -2 rounds to nearest 100
 
         # Define the Y limits to keep it perfectly centered around the data
-        y_window = 2500 # Set a fixed window size for Y as well 
+        y_window = 1000 # Set a fixed window size for Y as well 
         y_min = zoom_y_center - (y_window / 2)
         y_max = zoom_y_center + (y_window / 2)
 
