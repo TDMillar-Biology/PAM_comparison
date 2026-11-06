@@ -10,7 +10,19 @@ threads: 32
 
 # Data Paths
 ref_genome: "data/reference_genome/ISO1-r6.58_main.fasta"
+ref_name: "IS01_release6"
+
 query_assembly: "data/assemblies/BL54591.curated.broken.fasta"
+query_name: "BL54591"
+
+main_chromosomes:
+  - X
+  - 2L
+  - 2R
+  - 3L
+  - 3R
+  - "4"
+
 repeat_lib: "data/repeat_libraries/LarracuenteLab.Repeat.library.specieslib_mod2_Mel_042623.fasta"
 euchromatin_bed: "config/euchromatin_boundaries.bed"
 

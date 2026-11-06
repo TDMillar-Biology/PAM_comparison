@@ -1,4 +1,63 @@
-rule scaffold_assembly:
+rule mummer_for_scaffolding:
+    input:
+        reference = config["ref_genome"],
+        query = config["query_assembly"]
+    output:
+        delta=f"results/01_scaffolding/{config['ref_name']}_{config['query_name']}.delta"
+    params:
+        prefix=f"results/01_scaffolding/{config['ref_name']}_{config['query_name']}"
+    resources:
+        mem_mb=16000,
+        runtime=120,
+        tasks=1
+    threads: 8
+    log:
+        "logs/01_scaffolding/nucmer_pre_scaffold.log"
+    container:
+        "workflow/containers/images/python_mummer.sif"
+    shell:
+        """
+        mkdir -p results/01_scaffolding logs/01_scaffolding
+
+        nucmer -p {params.prefix} \
+            {input.reference} {input.query} -t {threads} 2> {log}
+        """
+
+rule daedalus_scaffold_assembly:
+    input:
+        delta=f"results/01_scaffolding/{config['ref_name']}_{config['query_name']}.delta",
+        qry=config["query_assembly"]
+    output:
+        coords=f"results/01_scaffolding/{config['ref_name']}_{config['query_name']}.coords",
+        scaffold=f"results/01_scaffolding/{config['query_name']}.scaffolded.fasta",
+        agp=f"results/01_scaffolding/{config['query_name']}.scaffolded.agp"
+    params:
+        prefix=f"{config['query_name']}.scaffolded",
+        chromosomes = " ".join(config["main_chromosomes"])
+    log:
+        "logs/01_scaffolding/daedalus.log"
+    container:
+        "workflow/containers/images/daedalus.sif"
+    threads: 4
+    resources:
+        mem_mb=16000,
+        runtime=120
+    shell:
+        """
+        mkdir -p results/01_scaffolding logs/01_scaffolding
+
+        show-coords -rclT {input.delta} > {output.coords}
+
+        daedalus scaffold \
+            --coords {output.coords} \
+            --fasta {input.qry} \
+            --prefix {params.prefix} \
+            --out_dir results/01_scaffolding \
+            --chromosomes {params.chromosomes} \
+            > {log} 2>&1
+        """
+
+rule scaffold_assembly: # swapped in daedalus for a test, keeping in case we revert to ragtag
     input:
         ref = config["ref_genome"],
         qry = config["query_assembly"]
@@ -7,6 +66,7 @@ rule scaffold_assembly:
         agp = "results/01_scaffolding/ragtag.scaffold.agp"
     log:
         "logs/01_scaffolding/ragtag.log"
+        
     conda: 
         "../envs/scaffolding.yaml"
     shell:
@@ -14,24 +74,28 @@ rule scaffold_assembly:
 
 rule extract_main_scaffolds:
     input:
-        scaffold = "results/01_scaffolding/ragtag.scaffold.fasta",
-        agp = "results/01_scaffolding/ragtag.scaffold.agp"
+        scaffold = rules.daedalus_scaffold_assembly.output.scaffold,
+        agp = rules.daedalus_scaffold_assembly.output.agp
     output:
-        main_fasta = "results/01_scaffolding/BL54591.canonical.scaffolded.fasta"
+        main_fasta = f"results/01_scaffolding/{config['query_name']}.canonical.scaffolded.fasta"
+    params:
+        chromosomes = "|".join(config["main_chromosomes"])
     log:
         "logs/01_scaffolding/extract_main.log"
-    conda: 
+    conda:
         "../envs/utilities.yaml"
     shell:
         """
-        awk '$1 ~ /_RagTag$/ {{print $1}}' {input.agp} | sort -u > results/01_scaffolding/main_scaffolds.txt 
-        
+        awk '$1 ~ /^({params.chromosomes})$/ {{print $1}}' {input.agp} | \
+            sort -u > results/01_scaffolding/main_scaffolds.txt
+
         if [ ! -s results/01_scaffolding/main_scaffolds.txt ]; then
             echo "Error: No canonical scaffolds found in AGP." > {log}
             exit 1
         fi
-        
-        seqtk subseq {input.scaffold} results/01_scaffolding/main_scaffolds.txt > {output.main_fasta} 2>> {log}
+
+        seqtk subseq {input.scaffold} results/01_scaffolding/main_scaffolds.txt \
+            > {output.main_fasta} 2>> {log}
         """
 
 rule extract_and_fix_euchromatin:
@@ -96,17 +160,19 @@ rule sample_pams:
 
 rule nucmer_synteny:
     input:
-        ref = "results/02_preprocessing/ISO1-r6.58_euchromatin.fixed.fasta",
-        qry = "results/01_scaffolding/BL54591.canonical.scaffolded.fasta"
+        ref = rules.extract_and_fix_euchromatin.output.fixed_fa,
+        qry = rules.extract_main_scaffolds.output.main_fasta
     output:
-        delta = "results/04_synteny/ISO1_BL54591.delta"
+        delta = f"results/04_synteny/{config['ref_name']}_{config['query_name']}_synteny.delta"
     log:
         "logs/04_synteny/nucmer.log"
     conda: 
         "../envs/alignment.yaml"
+    params:
+        prefix = f"results/04_synteny/{config['ref_name']}_{config['query_name']}_synteny"
     threads: 1  
     resources:
         mem_mb = 16000,   
         runtime = 120    
     shell:
-        "nucmer -p results/04_synteny/ISO1_BL54591 {input.ref} {input.qry} 2> {log}"
+        "nucmer -p {params.prefix} {input.ref} {input.qry} 2> {log}"

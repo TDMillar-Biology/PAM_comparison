@@ -7,8 +7,10 @@ rule bowtie_index_ref:
         prefix = "results/05_alignment/ISO1/ISO1"
     conda: 
         "../envs/alignment.yaml"
+    log:
+        "logs/bow_tie_index_ref.log"
     shell:
-        "bowtie-build {input.ref} {params.prefix}"
+        "bowtie-build {input.ref} {params.prefix} > {log} 2>&1"
 
 rule bowtie_align_ref:
     input:
@@ -29,7 +31,7 @@ rule bowtie_align_ref:
         mem_mb = 32000,   
         runtime = 360    
     shell:
-        "bowtie -f -m {params.max_hits} -v {params.mismatch} -a --best --sam -p {threads} {params.prefix} {input.pams} > {output.sam} 2> {log}"
+        "bowtie -f -m {params.max_hits} -v {params.mismatch} -a --best --sam -p {threads} {params.prefix} {input.pams} > {output.sam} > {log} 2>&1"
 
 rule bowtie_index_qry:
     input:
@@ -40,8 +42,10 @@ rule bowtie_index_qry:
         prefix = "results/05_alignment/BL54591/BL54591"
     conda: 
         "../envs/alignment.yaml"
+    log:
+        "logs/bowtie_index_qry.log"
     shell:
-        "bowtie-build {input.ref} {params.prefix}"
+        "bowtie-build {input.ref} {params.prefix} > {log} 2>&1"
 
 rule bowtie_align_qry:
     input:
@@ -62,4 +66,4 @@ rule bowtie_align_qry:
         mem_mb = 32000,
         runtime = 360
     shell:
-        "bowtie -f -m {params.max_hits} -v {params.mismatch} -a --best --sam -p {threads} {params.prefix} {input.pams} > {output.sam} 2> {log}"
+        "bowtie -f -m {params.max_hits} -v {params.mismatch} -a --best --sam -p {threads} {params.prefix} {input.pams} > {output.sam} > {log} >2&1"

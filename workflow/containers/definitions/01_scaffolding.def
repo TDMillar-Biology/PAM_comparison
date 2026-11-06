@@ -1,0 +1,36 @@
+Bootstrap: docker
+From: condaforge/miniforge3:latest
+
+%labels
+    Author "CRISPR-CFD Pipeline"
+    Version "1.1"
+    Stage "01_scaffolding"
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update && apt-get install -y --no-install-recommends \
+        procps \
+        ca-certificates \
+        build-essential \
+        git \
+        && apt-get clean \
+        && rm -rf /var/lib/apt/lists/*
+
+    mamba create -y -n scaffolding -c conda-forge -c bioconda \
+        python=3.10 \
+        mummer4 \
+        samtools \
+        seqtk \
+        pip
+
+    /opt/conda/envs/scaffolding/bin/pip install --no-cache-dir \
+        git+https://github.com/TDMillar-Biology/daedalus.git || true
+
+    mamba clean -a -y
+
+%environment
+    export PATH=/opt/conda/envs/scaffolding/bin:$PATH
+    export CONDA_DEFAULT_ENV=scaffolding
+
+%runscript
+    exec "$@"

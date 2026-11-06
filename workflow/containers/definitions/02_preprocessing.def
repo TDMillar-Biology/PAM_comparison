@@ -1,0 +1,30 @@
+Bootstrap: docker
+From: condaforge/miniforge3:latest
+
+%labels
+    Author "CRISPR-CFD Pipeline"
+    Version "1.0"
+    Stage "02_preprocessing"
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update && apt-get install -y --no-install-recommends \
+        procps \
+        ca-certificates \
+        && apt-get clean \
+        && rm -rf /var/lib/apt/lists/*
+
+    mamba create -y -n preprocessing -c conda-forge -c bioconda \
+        python=3.10 \
+        bedtools \
+        pybedtools \
+        biopython \
+        samtools
+    mamba clean -a -y
+
+%environment
+    export PATH=/opt/conda/envs/preprocessing/bin:$PATH
+    export CONDA_DEFAULT_ENV=preprocessing
+
+%runscript
+    exec "$@"

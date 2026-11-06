@@ -1,0 +1,36 @@
+Bootstrap: docker
+From: condaforge/miniforge3:latest
+
+%labels
+    Author "CRISPR-CFD Pipeline"
+    Version "1.0"
+    Stage "04_synteny"
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update && apt-get install -y --no-install-recommends \
+        procps \
+        ca-certificates \
+        build-essential \
+        git \
+        && apt-get clean \
+        && rm -rf /var/lib/apt/lists/*
+
+    mamba create -y -n synteny -c conda-forge -c bioconda \
+        python=3.10 \
+        mummer4 \
+        bcftools \
+        samtools \
+        intervaltree \
+        biopython \
+        pandas \
+        numpy \
+        scipy
+    mamba clean -a -y
+
+%environment
+    export PATH=/opt/conda/envs/synteny/bin:$PATH
+    export CONDA_DEFAULT_ENV=synteny
+
+%runscript
+    exec "$@"

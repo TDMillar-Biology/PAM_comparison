@@ -1,24 +1,22 @@
 # workflow/Snakefile
-# Entrypoint
 configfile: "config/config.yaml"
 
 def get_pam_fasta(wildcards):
     if config.get("test_mode", False):
-        return "results/03_pam_discovery/ISO1.masked.euchromatic.PAMs.10pct.fa"
-    return "results/03_pam_discovery/ISO1.masked.euchromatic.PAMs.fa"
+        return rules.sample_pams.output.sample
+    return rules.discover_pams.output.fa
 
 rule all:
     input:
-        # The main data output
-        #"results/07_summary/conserved_pams.csv",
-        "results/08_figures/multi_tolerance_sunburst.png",
-        "results/08_figures/cfd_shift.png"
-        #"results/07_summary/pam_orthology_summary.csv",
-        # The visualization output (this triggers the plotter, which triggers the mapper)
-        #"results/08_figures"
+        rules.plot_tolerance_venns.output.sunburst_plot,
+        rules.plot_synteny_diagnostics.output.plot
 
-# Import the modules
-include: "rules/preliminaries.smk"
-include: "rules/mapping.smk"
-include: "rules/scoring.smk"
-#include: "rules/tmp.smk"
+# Modular rule inclusion following stage hierarchy
+include: "rules/01_scaffolding/scaffold.smk"
+include: "rules/02_preprocessing/preprocess.smk"
+include: "rules/03_pam_discovery/discover.smk"
+include: "rules/04_synteny/synteny.smk"
+include: "rules/05_alignment/align.smk"
+include: "rules/06_cfd_scores/score.smk"
+include: "rules/07_summary/summary.smk"
+include: "rules/08_figures/figures.smk"

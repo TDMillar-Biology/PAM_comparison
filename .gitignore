@@ -1,3 +1,32 @@
-results
-.snakemake
-data
+# Pipeline data and outputs
+results/
+data/
+.snakemake/
+
+# Large archives
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+
+# Apptainer / Singularity images
+*.sif
+*.simg
+
+# Python and application caches
+.cache/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Generated logs
+logs/
+*.log
+
+# Generated figures and DAGs
+dag.png
+figures/dag.png
+
+# Operating system / editor files
+.DS_Store
+*~

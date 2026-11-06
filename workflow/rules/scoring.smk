@@ -83,22 +83,23 @@ rule plot_synteny_diagnostics:
         plot = "results/08_figures/cfd_shift.png"
     params:
         data_dir = directory("results/07_summary")
-    conda:
-        "../envs/PAM_orthology.yaml"
+    container:
+        "workflow/containers/images/PAM_orthology.sif"
+    log: "logs/plot_synteny_diagnostics.log"
     shell:
         """
         python3 workflow/scripts/synteny_plotter.py \
             --data-dir {params.data_dir} \
             --figures {output.figures} \
             --ref-cfd {input.ref_cfd} \
-            --query-cfd {input.qry_cfd}
+            --query-cfd {input.qry_cfd} > {log} 2>&1
         """
 
 rule plot_tolerance_venns:
     input:
         ref_cfd = "results/06_cfd_scores/iso1_raw_cfd.csv",
         qry_cfd = "results/06_cfd_scores/bl_raw_cfd.csv",
-        delta = "results/04_synteny/ISO1_BL54591.delta"
+        delta = f"results/04_synteny/{config['ref_name']}_{config['query_name']}_synteny.delta"
     output:
         # Tracking the specific file the script generates ensures 
         # Snakemake knows exactly when this rule is complete
@@ -106,13 +107,14 @@ rule plot_tolerance_venns:
     params:
         # We pass the parent directory to the --figures argument
         figures_dir = "results/08_figures"
-    conda:
-        "../envs/PAM_orthology.yaml"
+    container:
+        "workflow/containers/images/PAM_orthology.sif"
+    log: "logs/plot_tolerance_venns.log"
     shell:
         """
         python3 workflow/scripts/venn_diagrams.py \
             --ref-cfd {input.ref_cfd} \
             --query-cfd {input.qry_cfd} \
             --delta {input.delta} \
-            --figures {params.figures_dir}
+            --figures {params.figures_dir} > {log} 2>&1
         """
