@@ -23,7 +23,8 @@ rule compute_cfd_ref:
             --fasta {input.ref} \
             --out {output.cfd} \
             --mismatch-scores {input.mismatch_scores} \
-            --pam-scores {input.pam_scores} > {log} 2>&1
+            --pam-scores {input.pam_scores} \
+            --threads {threads} > {log} 2>&1
         """
 
 rule compute_cfd_qry:
@@ -49,5 +50,6 @@ rule compute_cfd_qry:
             --fasta {input.ref} \
             --out {output.cfd} \
             --mismatch-scores {input.mismatch_scores} \
-            --pam-scores {input.pam_scores} > {log} 2>&1
+            --pam-scores {input.pam_scores} \
+            --threads {threads} > {log} 2>&1
         """

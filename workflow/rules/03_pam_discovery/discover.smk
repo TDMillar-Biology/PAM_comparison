@@ -30,7 +30,7 @@ rule sample_pams:
     log:
         "logs/03_pam_discovery/sample_pams.log"
     container:
-        "containers/images/python_analysis.sif"
+        "containers/images/01_scaffolding.sif"
     threads: 1
     resources:
         mem_mb = 8000,

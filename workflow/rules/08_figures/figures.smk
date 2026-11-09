@@ -38,7 +38,7 @@ rule plot_tolerance_venns:
     params:
         figures_dir = f"results/08_figures/{config['ref_name']}_{config['query_name']}"
     container:
-        "containers/python_analysis.sif"
+        "containers/images/python_analysis.sif"
     shell:
         """
         python3 workflow/scripts/venn_diagrams.py \
