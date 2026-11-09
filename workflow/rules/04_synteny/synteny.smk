@@ -5,14 +5,16 @@ rule nucmer_synteny:
         ref = rules.extract_and_fix_euchromatin.output.fixed_fa,
         qry = rules.extract_main_scaffolds.output.main_fasta
     output:
-        delta = "results/04_synteny/ISO1_BL54591.delta"
+        delta = f"results/04_synteny/{config['ref_name']}_{config['query_name']}.delta"
+    params:
+        prefix = f"results/04_synteny/{config['ref_name']}_{config['query_name']}"
     log:
         "logs/04_synteny/nucmer_synteny.log"
     container:
-        "containers/04_synteny.sif"
-    threads: 1
+        "containers/images/04_synteny.sif"
+    threads: config.get("threads", 8)
     resources:
         mem_mb = 16000,
         runtime = 120
     shell:
-        "nucmer -p results/04_synteny/ISO1_BL54591 {input.ref} {input.qry} > {log} 2>&1"
+        "nucmer -p {params.prefix} {input.ref} {input.qry} -t {threads} > {log} 2>&1"

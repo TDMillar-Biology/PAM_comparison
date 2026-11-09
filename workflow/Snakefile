@@ -6,11 +6,6 @@ def get_pam_fasta(wildcards):
         return rules.sample_pams.output.sample
     return rules.discover_pams.output.fa
 
-rule all:
-    input:
-        rules.plot_tolerance_venns.output.sunburst_plot,
-        rules.plot_synteny_diagnostics.output.plot
-
 # Modular rule inclusion following stage hierarchy
 include: "rules/01_scaffolding/scaffold.smk"
 include: "rules/02_preprocessing/preprocess.smk"
@@ -20,3 +15,9 @@ include: "rules/05_alignment/align.smk"
 include: "rules/06_cfd_scores/score.smk"
 include: "rules/07_summary/summary.smk"
 include: "rules/08_figures/figures.smk"
+
+rule all:
+    input:
+        rules.plot_tolerance_venns.output.sunburst_plot,
+        rules.plot_synteny_diagnostics.output.plot
+    default_target: True

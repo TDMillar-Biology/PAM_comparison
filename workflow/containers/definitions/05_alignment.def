@@ -17,8 +17,7 @@ From: condaforge/miniforge3:latest
     mamba create -y -n alignment -c conda-forge -c bioconda \
         bowtie \
         bowtie2 \
-        samtools \
-        fastx-toolkit
+        samtools
     mamba clean -a -y
 
 %environment

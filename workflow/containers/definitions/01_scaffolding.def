@@ -6,6 +6,9 @@ From: condaforge/miniforge3:latest
     Version "1.1"
     Stage "01_scaffolding"
 
+%files
+    /home/mahullocaladmin/Desktop/projects/daedalus /opt/daedalus
+
 %post
     export DEBIAN_FRONTEND=noninteractive
     apt-get update && apt-get install -y --no-install-recommends \
@@ -23,14 +26,20 @@ From: condaforge/miniforge3:latest
         seqtk \
         pip
 
-    /opt/conda/envs/scaffolding/bin/pip install --no-cache-dir \
-        git+https://github.com/TDMillar-Biology/daedalus.git || true
+    /opt/conda/envs/scaffolding/bin/python -m pip install \
+        --no-cache-dir /opt/daedalus
 
     mamba clean -a -y
 
 %environment
     export PATH=/opt/conda/envs/scaffolding/bin:$PATH
     export CONDA_DEFAULT_ENV=scaffolding
+
+%test
+    daedalus --version
+    nucmer --version
+    samtools --version
+    seqtk 2>&1 | grep -q "Usage"
 
 %runscript
     exec "$@"

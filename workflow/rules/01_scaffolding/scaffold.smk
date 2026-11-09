@@ -16,7 +16,7 @@ rule mummer_for_scaffolding:
     log:
         "logs/01_scaffolding/mummer_for_scaffolding.log"
     container:
-        "containers/01_scaffolding.sif"
+        "containers/images/01_scaffolding.sif"
     shell:
         "nucmer -p {params.prefix} {input.reference} {input.query} -t {threads} > {log} 2>&1"
 
@@ -34,7 +34,7 @@ rule daedalus_scaffold_assembly:
     log:
         "logs/01_scaffolding/daedalus_scaffold_assembly.log"
     container:
-        "containers/01_scaffolding.sif"
+        "containers/images/01_scaffolding.sif"
     threads: 4
     resources:
         mem_mb = 16000,
@@ -64,14 +64,29 @@ rule extract_main_scaffolds:
     log:
         "logs/01_scaffolding/extract_main_scaffolds.log"
     container:
-        "containers/01_scaffolding.sif"
+        "containers/images/01_scaffolding.sif"
+
     shell:
         """
-        awk '{{print $1}}' {input.agp} | sort -u | grep -E "^({params.chrom_patterns})" > {output.scaffold_list} 2> {log} || true
+        awk '$1 !~ /^#/ {{print $1}}' {input.agp} | sort -u | \
+            grep -E "^({params.chrom_patterns})$" \
+            > {output.scaffold_list} || true
 
         if [ ! -s {output.scaffold_list} ]; then
-            awk '{{print $1}}' {input.agp} | sort -u > {output.scaffold_list} 2>> {log}
+            echo "WARNING: No configured chromosomes matched." > {log}
+            echo "WARNING: Falling back to ALL AGP scaffolds." >> {log}
+
+            awk '$1 !~ /^#/ {{print $1}}' {input.agp} | \
+                sort -u > {output.scaffold_list}
+        else
+            echo "INFO: Using configured chromosome selection." > {log}
         fi
 
-        seqtk subseq {input.scaffold} {output.scaffold_list} > {output.main_fasta} 2>> {log}
+        echo "INFO: Selected scaffolds:" >> {log}
+        cat {output.scaffold_list} >> {log}
+
+        seqtk subseq \
+            {input.scaffold} \
+            {output.scaffold_list} \
+            > {output.main_fasta} 2>> {log}
         """

@@ -2,21 +2,25 @@
 
 rule map_pam_orthology:
     input:
-        ref_cfd = rules.compute_cfd_iso1.output.cfd,
-        qry_cfd = rules.compute_cfd_bl.output.cfd,
-        delta = rules.nucmer_synteny.output.delta
+        ref_cfd = rules.compute_cfd_ref.output.cfd,
+        qry_cfd = rules.compute_cfd_qry.output.cfd,
+        delta   = rules.nucmer_synteny.output.delta
     output:
-        conserved = "results/07_summary/conserved_pams.csv",
-        failed = "results/07_summary/failed_tolerance_pams.csv",
-        unmapped_ref = "results/07_summary/unmapped_ref.csv",
-        unmapped_qry = "results/07_summary/unmapped_qry.csv"
-    log:
-        "logs/07_summary/map_pam_orthology.log"
+        conserved    = f"results/07_summary/{config['ref_name']}_{config['query_name']}/conserved_pams.csv",
+        failed       = f"results/07_summary/{config['ref_name']}_{config['query_name']}/failed_tolerance_pams.csv",
+        unmapped_ref = f"results/07_summary/{config['ref_name']}_{config['query_name']}/unmapped_ref.csv",
+        unmapped_qry = f"results/07_summary/{config['ref_name']}_{config['query_name']}/unmapped_qry.csv"
     params:
-        out_dir = "results/07_summary",
-        tol = 1000
+        out_dir = f"results/07_summary/{config['ref_name']}_{config['query_name']}",
+        tol     = config.get("cfd", {}).get("tolerance", 1000)
+    log:
+        f"logs/07_summary/map_pam_orthology_{config['ref_name']}_{config['query_name']}.log"
     container:
-        "containers/python_analysis.sif"
+        "containers/images/python_analysis.sif"
+    threads: config.get("threads", 8)
+    resources:
+        mem_mb = 16000,
+        runtime = 60
     shell:
         """
         python3 workflow/scripts/synteny_mapper.py \

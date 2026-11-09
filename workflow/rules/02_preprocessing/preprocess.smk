@@ -9,7 +9,7 @@ rule extract_and_fix_euchromatin:
     log:
         "logs/02_preprocessing/extract_and_fix_euchromatin.log"
     container:
-        "containers/02_preprocessing.sif"
+        "containers/images/02_preprocessing.sif"
     shell:
         """
         (bedtools getfasta -fi {input.ref} -bed {input.bed} | \
@@ -25,7 +25,7 @@ rule repeat_masker:
     log:
         "logs/02_preprocessing/repeat_masker.log"
     container:
-        "containers/02_preprocessing.sif"
+        "containers/images/02_preprocessing.sif"
     threads: config.get("threads", 16)
     shell:
         "RepeatMasker -lib {input.lib} -pa {threads} -dir results/02_preprocessing/ {input.fa} > {log} 2>&1"

@@ -1,5 +1,6 @@
 # Pipeline data and outputs
 results/
+old_results_target_removal/
 data/
 .snakemake/
 

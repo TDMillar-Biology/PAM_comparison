@@ -1,34 +1,63 @@
+
 Bootstrap: docker
 From: condaforge/miniforge3:latest
 
 %labels
     Author "CRISPR-CFD Pipeline"
-    Version "1.0"
+    Version "1.2"
     Stage "06_cfd_scores_07_summary_08_figures"
 
+%files
+    /home/mahullocaladmin/Desktop/projects/svmu2_package /opt/svmu2_package
+
 %post
+    set -eu
     export DEBIAN_FRONTEND=noninteractive
+
     apt-get update && apt-get install -y --no-install-recommends \
         procps \
         ca-certificates \
+        git \
         && apt-get clean \
         && rm -rf /var/lib/apt/lists/*
 
     mamba create -y -n python_analysis -c conda-forge -c bioconda \
-        python=3.10 \
+        python=3.11 \
         numpy \
         pandas \
         scipy \
-        matplotlib-base \
-        seaborn \
-        plotly \
+        pysam \
         biopython \
-        intervaltree
+        intervaltree \
+        matplotlib \
+        matplotlib-venn \
+        seaborn \
+        ruptures \
+        plotly \
+        networkx \
+        pymannkendall \
+        sortedcontainers \
+        pip
+
+    /opt/conda/envs/python_analysis/bin/python -m pip install \
+        --no-cache-dir --no-deps /opt/svmu2_package
+
+    /opt/conda/envs/python_analysis/bin/python -m pip check
+
     mamba clean -a -y
 
 %environment
     export PATH=/opt/conda/envs/python_analysis/bin:$PATH
     export CONDA_DEFAULT_ENV=python_analysis
+    export PYTHONNOUSERSITE=1
+    export MPLBACKEND=Agg
+
+%test
+    /opt/conda/envs/python_analysis/bin/python -c \
+        "import numpy, scipy, pysam, ruptures, matplotlib_venn, networkx, pymannkendall, sortedcontainers"
+
+    /opt/conda/envs/python_analysis/bin/python -c \
+        "from svmu2.orchestration.synteny import resolve_synteny"
 
 %runscript
     exec "$@"

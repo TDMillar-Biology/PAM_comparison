@@ -19,12 +19,18 @@ From: condaforge/miniforge3:latest
         bedtools \
         pybedtools \
         biopython \
-        samtools
+        samtools \
+        repeatmasker
     mamba clean -a -y
 
 %environment
     export PATH=/opt/conda/envs/preprocessing/bin:$PATH
     export CONDA_DEFAULT_ENV=preprocessing
+
+%test
+    command -v RepeatMasker
+    command -v bedtools
+    command -v samtools
 
 %runscript
     exec "$@"
