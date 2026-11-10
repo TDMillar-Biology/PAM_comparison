@@ -10,7 +10,7 @@ rule bowtie_index_ref:
     params:
         prefix = f"results/05_alignment/{config['ref_name']}/{config['ref_name']}"
     container:
-        "containers/images/05_alignment.sif"
+        "workflow/containers/images/05_alignment.sif"
     shell:
         "bowtie-build {input.ref} {params.prefix} > {log} 2>&1"
 
@@ -27,7 +27,7 @@ rule bowtie_align_ref:
         mismatch = config["bowtie_mismatches"],
         max_hits = config["max_hits"]
     container:
-        "containers/images/05_alignment.sif"
+        "workflow/containers/images/05_alignment.sif"
     threads: config.get("threads", 16)
     resources:
         mem_mb = 32000,
@@ -45,7 +45,7 @@ rule bowtie_index_qry:
     params:
         prefix = f"results/05_alignment/{config['query_name']}/{config['query_name']}"
     container:
-        "containers/images/05_alignment.sif"
+        "workflow/containers/images/05_alignment.sif"
     shell:
         "bowtie-build {input.ref} {params.prefix} > {log} 2>&1"
 
@@ -62,7 +62,7 @@ rule bowtie_align_qry:
         mismatch = config["bowtie_mismatches"],
         max_hits = config["max_hits"]
     container:
-        "containers/images/05_alignment.sif"
+        "workflow/containers/images/05_alignment.sif"
     threads: config.get("threads", 16)
     resources:
         mem_mb = 32000,

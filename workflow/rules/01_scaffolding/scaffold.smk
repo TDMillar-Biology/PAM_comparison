@@ -16,7 +16,7 @@ rule mummer_for_scaffolding:
     log:
         "logs/01_scaffolding/mummer_for_scaffolding.log"
     container:
-        "containers/images/01_scaffolding.sif"
+        "workflow/containers/images/01_scaffolding.sif"
     shell:
         "nucmer -p {params.prefix} {input.reference} {input.query} -t {threads} > {log} 2>&1"
 
@@ -34,7 +34,7 @@ rule daedalus_scaffold_assembly:
     log:
         "logs/01_scaffolding/daedalus_scaffold_assembly.log"
     container:
-        "containers/images/01_scaffolding.sif"
+        "workflow/containers/images/01_scaffolding.sif"
     threads: 4
     resources:
         mem_mb = 16000,
@@ -64,7 +64,7 @@ rule extract_main_scaffolds:
     log:
         "logs/01_scaffolding/extract_main_scaffolds.log"
     container:
-        "containers/images/01_scaffolding.sif"
+        "workflow/containers/images/01_scaffolding.sif"
 
     shell:
         """

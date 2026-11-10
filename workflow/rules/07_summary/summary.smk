@@ -16,7 +16,7 @@ rule map_pam_orthology:
     log:
         f"logs/07_summary/map_pam_orthology_{config['ref_name']}_{config['query_name']}.log"
     container:
-        "containers/images/python_analysis.sif"
+        "workflow/containers/images/python_analysis.sif"
     threads: config.get("threads", 8)
     resources:
         mem_mb = 16000,

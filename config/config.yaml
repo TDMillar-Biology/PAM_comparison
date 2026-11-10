@@ -10,7 +10,7 @@ threads: 32
 
 # Data Paths
 ref_genome: "data/reference_genome/ISO1-r6.58_main.fasta"
-ref_name: "IS01_release6"
+ref_name: "ISO1_release6"
 
 query_assembly: "data/assemblies/BL54591.curated.broken.fasta"
 query_name: "BL54591"

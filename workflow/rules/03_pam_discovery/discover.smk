@@ -11,7 +11,7 @@ rule discover_pams:
     log:
         "logs/03_pam_discovery/discover_pams.log"
     container:
-        "containers/images/python_analysis.sif"
+        "workflow/containers/images/python_analysis.sif"
     shell:
         """
         python3 workflow/scripts/pam_discovery.py \
@@ -30,7 +30,7 @@ rule sample_pams:
     log:
         "logs/03_pam_discovery/sample_pams.log"
     container:
-        "containers/images/01_scaffolding.sif"
+        "workflow/containers/images/01_scaffolding.sif"
     threads: 1
     resources:
         mem_mb = 8000,

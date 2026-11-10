@@ -16,7 +16,7 @@ rule plot_synteny_diagnostics:
         data_dir = rules.map_pam_orthology.params.out_dir,
         figures = f"results/08_figures/{config['ref_name']}_{config['query_name']}"
     container:
-        "containers/images/python_analysis.sif"
+        "workflow/containers/images/python_analysis.sif"
     shell:
         """
         python3 workflow/scripts/synteny_plotter.py \
@@ -38,7 +38,7 @@ rule plot_tolerance_venns:
     params:
         figures_dir = f"results/08_figures/{config['ref_name']}_{config['query_name']}"
     container:
-        "containers/images/python_analysis.sif"
+        "workflow/containers/images/python_analysis.sif"
     shell:
         """
         python3 workflow/scripts/venn_diagrams.py \

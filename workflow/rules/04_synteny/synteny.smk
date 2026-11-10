@@ -11,7 +11,7 @@ rule nucmer_synteny:
     log:
         "logs/04_synteny/nucmer_synteny.log"
     container:
-        "containers/images/04_synteny.sif"
+        "workflow/containers/images/04_synteny.sif"
     threads: config.get("threads", 8)
     resources:
         mem_mb = 16000,

@@ -11,7 +11,7 @@ rule compute_cfd_ref:
     log:
         f"logs/06_cfd_scores/compute_cfd_{config['ref_name']}.log"
     container:
-        "containers/images/python_analysis.sif"
+        "workflow/containers/images/python_analysis.sif"
     threads: config.get("threads", 16)
     resources:
         mem_mb = 16000,
@@ -38,7 +38,7 @@ rule compute_cfd_qry:
     log:
         f"logs/06_cfd_scores/compute_cfd_{config['query_name']}.log"
     container:
-        "containers/images/python_analysis.sif"
+        "workflow/containers/images/python_analysis.sif"
     threads: config.get("threads", 16)
     resources:
         mem_mb = 16000,
