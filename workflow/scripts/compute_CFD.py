@@ -52,9 +52,9 @@ def calc_cfd(wt, sg, pam):
     for i, (w, s) in enumerate(zip(wt_u, sg_u), start=1):
         if w != s:
             key = f"r{w}:d{revcom(s)},{i}"
-            score *= worker_mm_scores.get(key, 1.0) 
+            score *= worker_mm_scores[key]
 
-    score *= worker_pam_scores.get(pam, 1.0)
+    score *= worker_pam_scores[pam]
     return score
 
 ############################################################
@@ -67,7 +67,7 @@ def process_chunk(chunk):
     context, calculates CFD, and returns formatted rows.
     """
     results = []
-    skipped = {'wt': 0, 'sg': 0, 'pam': 0}
+    skipped = {'guide': 0, 'target': 0, 'pam': 0}
 
     for read in chunk:
         name, qseq, qname, is_reverse, ref_chr, ref_start, ref_end = read
@@ -83,25 +83,28 @@ def process_chunk(chunk):
         if is_reverse:
             genomic_seq = revcom(genomic_seq)
 
-        wt  = genomic_seq[:20]
-        pam = genomic_seq[21:23] 
-        sg  = qseq[:20]
+        # The Bowtie query is the ISO1-derived guide; the assembly provides
+        # the genomic target and its PAM (both oriented on the PAM strand).
+        guide = qseq[:20]
+        target = genomic_seq[:20]
+        pam = genomic_seq[21:23]
 
         # Tally and skip ambiguities
-        if "N" in wt:
-            skipped['wt'] += 1
+        if "N" in guide:
+            skipped['guide'] += 1
             continue
-        if "N" in sg:
-            skipped['sg'] += 1
+        if "N" in target:
+            skipped['target'] += 1
             continue
         if "N" in pam:
             skipped['pam'] += 1
             continue
 
-        cfd = calc_cfd(wt, sg, pam)
+        # Doench CFD: original guide, genomic target, genomic PAM
+        cfd = calc_cfd(guide, target, pam)
 
-        # 1. Calculate number of mismatches between wt and sg
-        mm_count = sum(1 for w, s in zip(wt, sg) if w != s)
+        # 1. Count mismatches between guide and genomic protospacer
+        mm_count = sum(1 for g, t in zip(guide, target) if g != t)
 
         # 2. Determine differences between the found PAM and 'GG'
         if pam[0] != 'G':
@@ -112,7 +115,7 @@ def process_chunk(chunk):
         results.append([
             name, qseq, qname, ref_chr,
             ref_start, ref_end,
-            genomic_seq, wt, pam, sg, cfd,
+            genomic_seq, guide, pam, target, cfd,
             mm_count
         ])
 
@@ -127,7 +130,7 @@ def compute_cfd_parallel(samfile, fastafile, outfile, mismatch_scores, pam_score
     hit_counter = defaultdict(int)
     
     lost_pams = []
-    total_skipped = {'wt': 0, 'sg': 0, 'pam': 0}
+    total_skipped = {'guide': 0, 'target': 0, 'pam': 0}
 
     # Set up the worker pool
     pool = mp.Pool(
@@ -184,16 +187,14 @@ def compute_cfd_parallel(samfile, fastafile, outfile, mismatch_scores, pam_score
             writer.writerows(chunk_results)
             
             # Aggregate skipped metrics
-            total_skipped['wt'] += skipped_counts['wt']
-            total_skipped['sg'] += skipped_counts['sg']
-            total_skipped['pam'] += skipped_counts['pam']
+            for key in total_skipped:
+                total_skipped[key] += skipped_counts[key]
 
     pool.close()
     pool.join()
 
-    print(f"Skipped {total_skipped['wt']} ambiguous WT rows.")
-    print(f"Skipped {total_skipped['sg']} ambiguous SG rows.")
-    print(f"Skipped {total_skipped['pam']} ambiguous PAM rows.")
+    for key, count in total_skipped.items():
+        print(f"Skipped {count} ambiguous {key} rows.")
 
     if lost_pams:
         lost_out = str(outfile).replace(".csv", "_lostPAMs.csv")

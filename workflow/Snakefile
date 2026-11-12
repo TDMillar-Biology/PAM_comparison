@@ -19,5 +19,6 @@ include: "rules/08_figures/figures.smk"
 rule all:
     input:
         rules.plot_tolerance_venns.output.sunburst_plot,
-        rules.plot_synteny_diagnostics.output.plot
+        rules.plot_synteny_diagnostics.output.plot,
+        rules.summarize_cfd.output.report
     default_target: True

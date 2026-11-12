@@ -1,0 +1,644 @@
+--- a/workflow/scripts/synteny_mapper.py
++++ b/workflow/scripts/synteny_mapper.py
+@@ -1,112 +1,210 @@
++#!/usr/bin/env python3
++"""Map ISO1-derived CRISPR candidates and summarize conservation by tolerance.
++
++Synteny projections and best alignment pairs are computed once here. Downstream
++figures must use conservation_by_tolerance.tsv rather than rematching targets.
++
++Definitions (count unique protospacerID, not Bowtie alignment rows):
++  shared:           detected in both raw CFD alignment tables
++  within_tolerance: shared with a selected projected match at distance <= tol
++  exceeds_tolerance: shared with a selected projected match at distance > tol
++  synteny_unresolved: shared, but no usable mapped reference/query pair
++  ref_only/qry_only: detected in only one raw CFD alignment table
++
++Block agreement is diagnostic, NOT a hard matching criterion: block boundaries
++may split otherwise concordant genomic positions.
++"""
++
+ from svmu2.orchestration.parse import parse
+ from svmu2.orchestration.synteny import resolve_synteny
+ import argparse
+ from pathlib import Path
+ import pandas as pd
+-import gc
++import numpy as np
++
++DEFAULT_TOLERANCES = (100, 300, 1000, 10000, 100000, 1000000)
++REQUIRED_CFD_COLUMNS = {"protospacerID", "ref_chr", "ref_start", "ref_end"}
++
+ 
+ def parse_args():
+-    parser = argparse.ArgumentParser(description="Block-first PAM orthology engine.")
++    parser = argparse.ArgumentParser(description="Synteny-guided PAM orthology and conservation statistics")
+     parser.add_argument("--ref-cfd", required=True, type=Path)
+     parser.add_argument("--query-cfd", required=True, type=Path)
+     parser.add_argument("--delta", required=True, type=Path)
+-    parser.add_argument("--out-dir", required=True, type=Path, help="Directory to store all CSV outputs")
+-    parser.add_argument("--tol", type=int, default=1000)
+-    
++    parser.add_argument("--out-dir", required=True, type=Path)
++    parser.add_argument("--tol", type=int, default=1000,
++                        help="Primary distance threshold for conserved_pams.csv (bp)")
++    parser.add_argument("--tolerances", nargs="+", type=int, default=DEFAULT_TOLERANCES,
++                        help="Distance thresholds to include in conservation_by_tolerance.tsv (bp)")
+     args = parser.parse_args()
++    if args.tol < 0 or any(t < 0 for t in args.tolerances):
++        parser.error("Distance tolerances must be non-negative")
++    args.tolerances = sorted(set(args.tolerances) | {args.tol})
+     args.out_dir.mkdir(parents=True, exist_ok=True)
+     return args
+ 
+-REQUIRED_CFD_COLUMNS = {"protospacerID", "ref_chr", "ref_start", "ref_end"}
+ 
+-def load_cfd_table(path: str) -> pd.DataFrame:
+-    df = pd.read_csv(path, dtype={"protospacerID": str, "ref_chr": str, "ref_start": int, "ref_end": int})
+-    if REQUIRED_CFD_COLUMNS - set(df.columns):
+-        raise ValueError(f"Missing columns in {path}")
++def load_cfd_table(path: Path) -> pd.DataFrame:
++    # Read only once; keep the original columns in matched CSVs for downstream CFD plots.
++    df = pd.read_csv(path, dtype={"protospacerID": str, "ref_chr": str,
++                                  "ref_start": int, "ref_end": int})
++    missing = REQUIRED_CFD_COLUMNS - set(df.columns)
++    if missing:
++        raise ValueError(f"{path}: missing columns {sorted(missing)}")
++    if df["protospacerID"].isna().any():
++        raise ValueError(f"{path}: missing protospacerID values")
+     df["midpoint"] = (df["ref_start"] + df["ref_end"]) / 2.0
+     return df
+ 
++
+ def assign_synteny(df, trees, mode="reference"):
+-    df_out = df.copy() 
++    # Preserve the existing rule: only unambiguous single-interval assignments
++    # are projected. We do not reject pairs solely for differing block IDs.
++    df_out = df.copy()
+     block_ids, yhats = [], []
+-
+     for row in df.itertuples(index=False):
+         tree = trees.get(row.ref_chr)
+-        x = row.midpoint 
+-
++        x = row.midpoint
+         if tree is None:
+             block_ids.append(None)
+-            if mode == "reference": yhats.append(None)
++            if mode == "reference":
++                yhats.append(None)
+             continue
+-
+         hits = tree.at(x)
+-        if not hits:
+-            block_ids.append(None)
+-            if mode == "reference": yhats.append(None)
+-        elif len(hits) == 1:
++        if len(hits) == 1:
+             hit_data = next(iter(hits)).data
+-            block_ids.append(hit_data.index) 
+-            if mode == "reference": yhats.append((hit_data.slope * x) + hit_data.y_intercept)
++            block_ids.append(hit_data.index)
++            if mode == "reference":
++                yhats.append((hit_data.slope * x) + hit_data.y_intercept)
+         else:
+-            # Drop duplications/paralogs to enforce 1:1 strict orthology
++            # No hit or multiple overlapping syntenic intervals: unresolved.
+             block_ids.append(None)
+-            if mode == "reference": yhats.append(None)
+-
++            if mode == "reference":
++                yhats.append(None)
+     df_out["syntenic_block"] = block_ids
+-    if mode == "reference": df_out["yhat"] = yhats
++    if mode == "reference":
++        df_out["yhat"] = yhats
+     return df_out
+ 
+-def merge_and_filter(ref_df, qry_df, out_dir, tol):
+-    print("[INFO] Executing block-wise merge and tolerance filtering...")
+-    
+-    ref_mapped = ref_df.dropna(subset=['syntenic_block'])
+-    qry_mapped = qry_df.dropna(subset=['syntenic_block'])
+-
+-    # 1. Perform the merge (this temporarily creates the combinatorial explosion)
+-    merged = ref_mapped.merge(qry_mapped, on="protospacerID", suffixes=('_ref', '_qry'))
+-    
+-    # 2. Calculate projection distances
+-    merged['proj_dist'] = (merged['midpoint_qry'] - merged['yhat']).abs()
+-    
+-    # 3. Collapse down to the single best hit per PAM
+-    # Sort so the smallest distance is first, then keep only that first row for each ID
+-    merged_best = merged.sort_values('proj_dist').drop_duplicates(subset='protospacerID', keep='first')
+-    
+-    # 4. Split based on tolerance using the deduplicated dataframe
+-    conserved = merged_best[merged_best['proj_dist'] <= tol]
+-    failed_tol = merged_best[merged_best['proj_dist'] > tol]
+-    
+-    # Optional: You might want to save the "rescued" multi-mappers vs strict 1:1s 
+-    # but for your current SVMU benchmarking, this keeps it clean.
++
++def candidate_counts(ref_df: pd.DataFrame, qry_df: pd.DataFrame) -> dict:
++    """Count unique candidate IDs before synteny filtering."""
++    ref_ids = pd.Index(ref_df["protospacerID"].unique())
++    qry_ids = pd.Index(qry_df["protospacerID"].unique())
++    n_shared = len(ref_ids.intersection(qry_ids, sort=False))
++    return {
++        "ref_detected": len(ref_ids),
++        "qry_detected": len(qry_ids),
++        "shared": n_shared,
++        "ref_only": len(ref_ids) - n_shared,
++        "qry_only": len(qry_ids) - n_shared,
++        "total_candidates": len(ref_ids) + len(qry_ids) - n_shared,
++    }
++
++
++def summarize_tolerances(merged_best: pd.DataFrame, counts: dict, tolerances) -> pd.DataFrame:
++    """Exhaustive, mutually exclusive conservation counts for every tolerance."""
++    matched = len(merged_best)  # One row per protospacerID after best-pair selection.
++    if matched > counts["shared"]:
++        raise ValueError("More selected pairs than candidate IDs detected in both tables")
++    unresolved = counts["shared"] - matched
++    distances = merged_best["proj_dist"].to_numpy(dtype=float)
++    if not np.isfinite(distances).all():
++        raise ValueError("Selected orthology pairs have nonfinite projection distances")
++
++    ref_blocks = merged_best["syntenic_block_ref"].to_numpy()
++    qry_blocks = merged_best["syntenic_block_qry"].to_numpy()
++    same_block = ref_blocks == qry_blocks
++    # Cross-chromosome matches are diagnostic; a block-ID match alone is not proof of orthology.
++    ref_chrom = merged_best["ref_chr_ref"].to_numpy()
++    qry_chrom = merged_best["ref_chr_qry"].to_numpy()
++    different_chrom = ref_chrom != qry_chrom
++    rows = []
++    for tol in tolerances:
++        within = distances <= tol
++        n_within = int(within.sum())
++        n_exceeds = matched - n_within
++        row = {
++            "tolerance_bp": int(tol),
++            "ref_detected": counts["ref_detected"],
++            "qry_detected": counts["qry_detected"],
++            "total_candidates": counts["total_candidates"],
++            "shared": counts["shared"],
++            "ref_only": counts["ref_only"],
++            "qry_only": counts["qry_only"],
++            "within_tolerance": n_within,
++            "exceeds_tolerance": n_exceeds,
++            "synteny_unresolved": unresolved,
++            "same_block_within": int((same_block & within).sum()),
++            "different_block_within": int((~same_block & within).sum()),
++            "same_block_exceeds": int((same_block & ~within).sum()),
++            "different_block_exceeds": int((~same_block & ~within).sum()),
++            "different_chromosome_within": int((different_chrom & within).sum()),
++            "different_chromosome_exceeds": int((different_chrom & ~within).sum()),
++        }
++        if n_within + n_exceeds + unresolved != counts["shared"]:
++            raise AssertionError("Shared-candidate accounting failed")
++        if (row["ref_only"] + row["qry_only"] + n_within + n_exceeds + unresolved
++                != counts["total_candidates"]):
++            raise AssertionError("Mutually exclusive category accounting failed")
++        rows.append(row)
++    return pd.DataFrame(rows)
++
++
++def merge_and_filter(ref_df, qry_df, out_dir, tol, tolerances, counts):
++    print("[INFO] Selecting nearest projected reference/query alignment per candidate")
++    ref_mapped = ref_df.dropna(subset=["syntenic_block", "yhat"])
++    qry_mapped = qry_df.dropna(subset=["syntenic_block"])
++
++    # Preserve the original candidate-ID join and minimum-distance selection.
++    # Different block IDs are allowed (and counted), because neighboring blocks
++    # may differ at genuine syntenic boundaries.
++    merged = ref_mapped.merge(qry_mapped, on="protospacerID", suffixes=("_ref", "_qry"))
++    merged["proj_dist"] = (merged["midpoint_qry"] - merged["yhat"]).abs()
++
++    # Preserve the publication pipeline's best-distance selection exactly.
++    # (Tied distances inherit the row ordering of the input CFD tables.)
++    merged_best = (merged.sort_values("proj_dist")
++                   .drop_duplicates(subset="protospacerID", keep="first"))
++
++    conserved = merged_best[merged_best["proj_dist"] <= tol]
++    failed_tol = merged_best[merged_best["proj_dist"] > tol]
+     conserved.to_csv(out_dir / "conserved_pams.csv", index=False)
+     failed_tol.to_csv(out_dir / "failed_tolerance_pams.csv", index=False)
+-    
+-    return conserved, failed_tol
+-    
++
++    summary = summarize_tolerances(merged_best, counts, tolerances)
++    summary.to_csv(out_dir / "conservation_by_tolerance.tsv", sep="\t", index=False)
++    print("[INFO] Unique-candidate conservation counts (not Bowtie alignment rows):")
++    print(summary[["tolerance_bp", "ref_only", "qry_only", "within_tolerance",
++                   "exceeds_tolerance", "synteny_unresolved"]].to_string(index=False))
++    return summary
++
++
+ def main():
+     args = parse_args()
+     ref_cfd = load_cfd_table(args.ref_cfd)
+     qry_cfd = load_cfd_table(args.query_cfd)
+-    
++    counts = candidate_counts(ref_cfd, qry_cfd)
++    print(f"[INFO] Unique candidate IDs: {counts['ref_detected']:,} ref; "
++          f"{counts['qry_detected']:,} query; {counts['shared']:,} shared")
++
+     _, primary_alns = parse(args.delta)
+     resolve_synteny(primary_alignments=primary_alns, breakpoint_map=None)
+-
+     ref_trees = {aln.reference: aln.reference_synteny_tree for aln in primary_alns.values()}
+     qry_trees = {aln.query: aln.query_synteny_tree for aln in primary_alns.values()}
+ 
+     ref_df = assign_synteny(ref_cfd, ref_trees, mode="reference")
+     qry_df = assign_synteny(qry_cfd, qry_trees, mode="query")
+ 
+-    # Isolate unmapped PAMs for diagnostics
+     unmapped_ref = ref_df[ref_df["syntenic_block"].isna()]
+     unmapped_qry = qry_df[qry_df["syntenic_block"].isna()]
+-    
+     unmapped_ref.to_csv(args.out_dir / "unmapped_ref.csv", index=False)
+     unmapped_qry.to_csv(args.out_dir / "unmapped_qry.csv", index=False)
++    print(f"[INFO] Alignment rows without unique synteny: "
++          f"{len(unmapped_ref):,} reference; {len(unmapped_qry):,} query")
+ 
+-    print(f"Diagnostics: {len(unmapped_ref)} Ref PAMs and {len(unmapped_qry)} Query PAMs lacked synteny.")
++    merge_and_filter(ref_df, qry_df, args.out_dir, args.tol, args.tolerances, counts)
+ 
+-    merge_and_filter(ref_df, qry_df, args.out_dir, args.tol)
+ 
+ if __name__ == "__main__":
+-    main()
+\ No newline at end of file
++    main()
+--- a/workflow/scripts/venn_diagrams.py
++++ b/workflow/scripts/venn_diagrams.py
+@@ -1,236 +1,114 @@
+-from svmu2.orchestration.parse import parse
+-from svmu2.orchestration.synteny import resolve_synteny
+-import matplotlib.pyplot as plt
+-from matplotlib_venn import venn2
++#!/usr/bin/env python3
++"""Plot mapper-computed, mutually exclusive PAM conservation categories.
++
++This module deliberately contains NO synteny-resolution, coordinate projection,
++or alignment-pairing code. Conservation counts are produced exclusively by
++synteny_mapper.py in conservation_by_tolerance.tsv.
++"""
++
+ import argparse
+ from pathlib import Path
++import matplotlib
++matplotlib.use("Agg")
++import matplotlib.pyplot as plt
+ import pandas as pd
+ 
+-def parse_args():
+-    parser = argparse.ArgumentParser(
+-        description="Minimal multi-tolerance Venn plotter.",
+-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+-    )
+-    parser.add_argument("--ref-cfd", required=True, type=Path, help="Reference/ISO1 CFD CSV")
+-    parser.add_argument("--query-cfd", required=True, type=Path, help="Query/BL54591 CFD CSV")
+-    parser.add_argument("--delta", required=True, type=Path, help="nucmer delta file")
+-    parser.add_argument("--figures", required=True, type=Path, help="Output dir to store the figures in")
++REQUIRED_COLUMNS = {
++    "tolerance_bp", "total_candidates", "shared", "ref_only", "qry_only",
++    "within_tolerance", "exceeds_tolerance", "synteny_unresolved",
++}
++
+ 
++def parse_args():
++    parser = argparse.ArgumentParser(description="Plot PAM conservation counts from the synteny mapper")
++    parser.add_argument("--summary", required=True, type=Path,
++                        help="conservation_by_tolerance.tsv produced by synteny_mapper.py")
++    parser.add_argument("--figures", required=True, type=Path,
++                        help="Directory for multi_tolerance_sunburst.png")
+     args = parser.parse_args()
+     args.figures.mkdir(parents=True, exist_ok=True)
+     return args
+ 
+-REQUIRED_CFD_COLUMNS = {"protospacerID", "ref_chr", "ref_start", "ref_end"}
+-
+-def load_cfd_table(path: Path) -> pd.DataFrame:
+-    dtypes = {"protospacerID": str, "ref_chr": str, "ref_start": int, "ref_end": int}
+-    df = pd.read_csv(path, dtype=dtypes)
+-
+-    if missing := REQUIRED_CFD_COLUMNS - set(df.columns):
+-        raise ValueError(f"{path} CFD table is missing columns: {sorted(missing)}")
+-    
+-    df["midpoint"] = (df["ref_start"] + df["ref_end"]) / 2.0
+-    return df
+-
+-def assign_synteny(df, trees, mode="reference"):
+-    df_out = df.copy() 
+-    block_ids = []
+-    
+-    if mode == "reference":
+-        yhats = []
+ 
++def load_summary(path):
++    df = pd.read_csv(path, sep="\t")
++    missing = REQUIRED_COLUMNS - set(df.columns)
++    if missing:
++        raise ValueError(f"{path}: missing required columns {sorted(missing)}")
++    if df["tolerance_bp"].duplicated().any():
++        raise ValueError("Tolerance summary contains duplicate tolerance thresholds")
+     for row in df.itertuples(index=False):
+-        tree = trees.get(row.ref_chr)
+-        x = row.midpoint 
+-
+-        if tree is None:
+-            block_ids.append(None)
+-            if mode == "reference": yhats.append(None)
+-            continue
+-
+-        hits = tree.at(x)
+-        if not hits:
+-            block_ids.append(None)
+-            if mode == "reference": yhats.append(None)
+-        elif len(hits) == 1:
+-            hit_data = next(iter(hits)).data
+-            block_ids.append(hit_data.index) 
+-            if mode == "reference": yhats.append((hit_data.slope * x) + hit_data.y_intercept)
+-        else:
+-            block_ids.append([hit.data.index for hit in hits])
+-            if mode == "reference": yhats.append([(hit.data.slope * x) + hit.data.y_intercept for hit in hits])
+-
+-    df_out["syntenic_block"] = block_ids
+-    if mode == "reference":
+-        df_out["yhat"] = yhats
+-    return df_out
+-
+-def pam_sets_by_block(df, block_col="syntenic_block", pam_col="protospacerID"):
+-    tmp = df.dropna(subset=[block_col]).explode(block_col)
+-    return tmp.groupby(block_col)[pam_col].apply(set).to_dict()
+-
+-def compare_pams_by_block(ref_df, qry_df, tol, block_col="syntenic_block"):
+-    ref_sets = pam_sets_by_block(ref_df, block_col=block_col)
+-    qry_sets = pam_sets_by_block(qry_df, block_col=block_col)
+-
+-    ref_mids = dict(zip(ref_df['protospacerID'], ref_df['midpoint']))
+-    qry_mids = dict(zip(qry_df['protospacerID'], qry_df['midpoint']))
+-    ref_yhats = dict(zip(ref_df['protospacerID'], ref_df['yhat']))
+-
+-    rows = []
+-    all_blocks = set(ref_sets.keys()) | set(qry_sets.keys()) 
+-
+-    for block in all_blocks:
+-        if pd.isna(block): continue
+-            
+-        ref_pams = ref_sets.get(block, set())
+-        qry_pams = qry_sets.get(block, set())
+-        
+-        shared_within_tolerance = set()
+-        shared_exceeds_tolerance = set()
+-        
+-        for pam in ref_pams & qry_pams:
+-            y_actual = qry_mids[pam]
+-            y_proj = ref_yhats.get(pam)
+-            
+-            # Require a valid projection AND passing the spatial tolerance
+-            if y_proj is not None and abs(y_proj - y_actual) <= tol:
+-                shared_within_tolerance.add(pam)
+-            else:
+-                # Captures both y_proj is None AND failed tolerance
+-                shared_exceeds_tolerance.add(pam) 
+-
+-        # Subtract both shared pools to get true uniques
+-        all_shared = shared_within_tolerance | shared_exceeds_tolerance
+-        ref_only = ref_pams - all_shared
+-        qry_only = qry_pams - all_shared
+-
+-        rows.append({
+-            "shared_within_tolerance_pams": sorted(shared_within_tolerance),
+-            "shared_exceeds_tolerance_pams": sorted(shared_exceeds_tolerance),
+-            "ref_only_pams": sorted(ref_only),
+-            "qry_only_pams": sorted(qry_only),
+-        })
+-    return pd.DataFrame(rows)
+-
+-def plot_tolerance_venns(ref_df, qry_df, output_dir):
+-    tolerances = [100, 300, 1000, 10000, 100000, 1000000]
+-    
+-    fig, axes = plt.subplots(2, 3, figsize=(20, 20))
+-    axes = axes.flatten()
+-    
+-    for i, tol in enumerate(tolerances):
+-        print(f"[INFO] Calculating overlaps for tolerance: ±{tol:,} bp")
+-        
+-        summary = compare_pams_by_block(ref_df, qry_df, tol)
+-        
+-        # Flatten the lists of PAMs from the dataframe
+-        shared_within_tolerance_set = set(pam for sublist in summary["shared_within_tolerance_pams"] for pam in sublist)
+-        shared_exceeds_tolerance_set = set(pam for sublist in summary["shared_exceeds_tolerance_pams"] for pam in sublist)
+-        ref_only_set = set(pam for sublist in summary["ref_only_pams"] for pam in sublist)
+-        qry_only_set = set(pam for sublist in summary["qry_only_pams"] for pam in sublist)
+-
+-        # Since we explicitly subtracted all shared PAMs in the logic, these are already true counts
+-        true_ref_only = len(ref_only_set)
+-        true_qry_only = len(qry_only_set)
+-        true_syntenic = len(shared_within_tolerance_set)
+-        true_divergent = len(shared_exceeds_tolerance_set)
+-        
+-        total_shared = true_syntenic + true_divergent
+-        
+-        # Calculate total PAMs for percentage breakdowns
+-        total_pams = true_ref_only + true_qry_only + total_shared
+-
+-        # Ensure we are using standard Matplotlib colors
+-        cmap = plt.get_cmap("Pastel1")
+-        
+-        # Define hierarchical data
+-        # Inner Ring: Ref Only, Query Only, Total Shared
+-        inner_sizes = [true_ref_only, true_qry_only, total_shared]
+-        
+-        # Keep Ref and Query blank here to avoid center-clustering.
+-        # Label 'Shared' centrally inside its large wedge.
+-        inner_labels = [
+-            "", 
+-            "", 
+-            f"Shared\n{total_shared:,}\n({(total_shared / total_pams) * 100:.1f}%)"
+-        ]
+-        inner_colors = [cmap(0), cmap(1), cmap(2)]
+-        
+-        # Outer Ring: Ref Only, Query Only, Syntenic (Within), Divergent (Exceeds)
+-        outer_sizes = [true_ref_only, true_qry_only, true_syntenic, true_divergent]
+-        
+-        # Move Ref Only and Query Only labels entirely to the outer ring
++        if row.shared != row.within_tolerance + row.exceeds_tolerance + row.synteny_unresolved:
++            raise ValueError(f"Shared-candidate categories do not sum at {row.tolerance_bp} bp")
++        if row.total_candidates != row.ref_only + row.qry_only + row.shared:
++            raise ValueError(f"Candidate categories do not sum at {row.tolerance_bp} bp")
++    return df.sort_values("tolerance_bp")
++
++
++def plot_tolerance_venns(summary, output_dir):
++    n = len(summary)
++    cols = 3
++    nrows = (n + cols - 1) // cols
++    fig, axes = plt.subplots(nrows, cols, figsize=(20, 10 * nrows))
++    axes = axes.flatten() if hasattr(axes, "flatten") else [axes]
++
++    # Keep the double-ring presentation, but add an explicit unresolved category.
++    palette = plt.get_cmap("Pastel1")
++    ref_color, qry_color, shared_color = palette(0), palette(1), palette(2)
++    blues = plt.get_cmap("Blues")
++    for ax, row in zip(axes, summary.itertuples(index=False)):
++        total = int(row.total_candidates)
++        def pct(value):
++            return f"{value / total * 100:.1f}%" if total else "0.0%"
++
++        ref_only = int(row.ref_only)
++        qry_only = int(row.qry_only)
++        shared = int(row.shared)
++        within = int(row.within_tolerance)
++        exceeds = int(row.exceeds_tolerance)
++        unresolved = int(row.synteny_unresolved)
++
++        inner_sizes = [ref_only, qry_only, shared]
++        outer_sizes = [ref_only, qry_only, within, exceeds, unresolved]
++        inner_labels = ["", "", f"Shared\n{shared:,}\n({pct(shared)})"]
+         outer_labels = [
+-            f"Ref Only\n{true_ref_only:,}\n({(true_ref_only / total_pams) * 100:.1f}%)", 
+-            f"Query Only\n{true_qry_only:,}\n({(true_qry_only / total_pams) * 100:.1f}%)", 
+-            f"Within Tol.\n{true_syntenic:,}\n({(true_syntenic / total_pams) * 100:.1f}%)", 
+-            f"Exceeds Tol.\n{true_divergent:,}\n({(true_divergent / total_pams) * 100:.1f}%)"
++            f"Ref only\n{ref_only:,}\n({pct(ref_only)})",
++            f"Query only\n{qry_only:,}\n({pct(qry_only)})",
++            f"Within tol.\n{within:,}\n({pct(within)})",
++            f"Exceeds tol.\n{exceeds:,}\n({pct(exceeds)})",
++            f"Unresolved\n{unresolved:,}\n({pct(unresolved)})",
+         ]
+-        
+-        # Match colors to the inner ring, but use slightly different shades for the shared split
+-        cmap_shared = plt.get_cmap("Blues")
+-        outer_colors = [cmap(0), cmap(1), cmap_shared(0.4), cmap_shared(0.2)]
+-
+-        # Plot parameters for the rings
+-        size = 0.35 # Width of each ring
+-        
+-        axes[i].clear() # Clear the axis to remove any residual formatting
+-        
+-        # Draw outer ring
+-        axes[i].pie(
+-            outer_sizes, 
+-            radius=1, 
+-            labels=outer_labels, 
+-            labeldistance=1.15, # Pushes text completely outside the plot
+-            colors=outer_colors, 
+-            wedgeprops=dict(width=size, edgecolor='white', linewidth=2),
+-            textprops={'fontsize': 10}
+-        )
+-
+-        # Draw inner ring
+-        axes[i].pie(
+-            inner_sizes, 
+-            radius=1 - size, 
+-            labels=inner_labels, 
+-            labeldistance=0.75, # Keeps the 'Shared' label nicely centered within its donut slice
+-            colors=inner_colors, 
+-            wedgeprops=dict(width=size, edgecolor='white', linewidth=2),
+-            textprops={'fontsize': 11, 'weight': 'bold'}
+-        )
+-                
+-        axes[i].set_title(f"Tolerance: ±{tol:,} bp", fontsize=14, pad=30) # Increased padding to accommodate outer text
+-
+-    plt.suptitle("Block-Aware PAM Conservation Across Spatial Tolerances", fontsize=18, y=0.95)
+-    plt.tight_layout(rect=[0, 0, 1, 0.93]) 
+-    
++        if total:
++            ax.pie(outer_sizes, radius=1, labels=outer_labels,
++                   labeldistance=1.15,
++                   colors=[ref_color, qry_color, blues(0.4), blues(0.2), palette(7)],
++                   wedgeprops=dict(width=0.35, edgecolor="white", linewidth=2),
++                   textprops={"fontsize": 9})
++            ax.pie(inner_sizes, radius=0.65, labels=inner_labels,
++                   labeldistance=0.75,
++                   colors=[ref_color, qry_color, shared_color],
++                   wedgeprops=dict(width=0.35, edgecolor="white", linewidth=2),
++                   textprops={"fontsize": 10, "weight": "bold"})
++        else:
++            ax.text(0.5, 0.5, "No detected candidates", ha="center", va="center",
++                    transform=ax.transAxes)
++        ax.set_title(f"Tolerance: ±{int(row.tolerance_bp):,} bp", fontsize=13, pad=30)
++
++    for ax in axes[n:]:
++        ax.set_visible(False)
++    fig.suptitle("Synteny-Guided PAM Conservation Across Spatial Tolerances", fontsize=18, y=0.98)
++    fig.tight_layout(rect=[0, 0, 1, 0.96])
+     output = output_dir / "multi_tolerance_sunburst.png"
+-    plt.savefig(output)
+-    plt.close()
++    fig.savefig(output, dpi=200)
++    plt.close(fig)
++    print(f"[INFO] Figure saved to {output}")
++
+ 
+ def main():
+     args = parse_args()
+-    print("[INFO] Loading inputs...")
+-    ref_cfd = load_cfd_table(args.ref_cfd)
+-    qry_cfd = load_cfd_table(args.query_cfd)
+-    _, primary_alns = parse(args.delta)
+-
+-    print("[INFO] Resolving synteny...")
+-    resolve_synteny(primary_alignments=primary_alns, breakpoint_map=None)
+-
+-    reference_trees = {aln.reference: aln.reference_synteny_tree for aln in primary_alns.values()}
+-    query_trees = {aln.query: aln.query_synteny_tree for aln in primary_alns.values()}
+-
+-    print("[INFO] Assigning synteny and calculating projections...")
+-    ref_df = assign_synteny(ref_cfd, reference_trees, mode="reference")
+-    qry_df = assign_synteny(qry_cfd, query_trees, mode="query")
+-
+-    ref_df = ref_df.explode(['syntenic_block', 'yhat'], ignore_index=True)
+-    ref_df = ref_df.dropna(subset=['yhat'])
+-
+-    print("[INFO] Plotting multi-tolerance Venn diagrams...")
+-    plot_tolerance_venns(ref_df, qry_df, args.figures)
+-    print(f"[INFO] Success. Check the {args.figures} directory.")
++    summary = load_summary(args.summary)
++    plot_tolerance_venns(summary, args.figures)
++
+ 
+ if __name__ == "__main__":
+-    main()
+\ No newline at end of file
++    main()
+--- a/workflow/rules/07_summary/summary.smk
++++ b/workflow/rules/07_summary/summary.smk
+@@ -9,7 +9,8 @@
+         conserved    = f"results/07_summary/{config['ref_name']}_{config['query_name']}/conserved_pams.csv",
+         failed       = f"results/07_summary/{config['ref_name']}_{config['query_name']}/failed_tolerance_pams.csv",
+         unmapped_ref = f"results/07_summary/{config['ref_name']}_{config['query_name']}/unmapped_ref.csv",
+-        unmapped_qry = f"results/07_summary/{config['ref_name']}_{config['query_name']}/unmapped_qry.csv"
++        unmapped_qry = f"results/07_summary/{config['ref_name']}_{config['query_name']}/unmapped_qry.csv",
++        tolerance_summary = f"results/07_summary/{config['ref_name']}_{config['query_name']}/conservation_by_tolerance.tsv"
+     params:
+         out_dir = f"results/07_summary/{config['ref_name']}_{config['query_name']}",
+         tol     = config.get("cfd", {}).get("tolerance", 1000)
+--- a/workflow/rules/08_figures/figures.smk
++++ b/workflow/rules/08_figures/figures.smk
+@@ -28,9 +28,7 @@
+ 
+ rule plot_tolerance_venns:
+     input:
+-        ref_cfd = rules.compute_cfd_ref.output.cfd,
+-        qry_cfd = rules.compute_cfd_qry.output.cfd,
+-        delta   = rules.nucmer_synteny.output.delta
++        summary = rules.map_pam_orthology.output.tolerance_summary
+     output:
+         sunburst_plot = f"results/08_figures/{config['ref_name']}_{config['query_name']}/multi_tolerance_sunburst.png"
+     log:
+@@ -42,8 +40,6 @@
+     shell:
+         """
+         python3 workflow/scripts/venn_diagrams.py \
+-            --ref-cfd {input.ref_cfd} \
+-            --query-cfd {input.qry_cfd} \
+-            --delta {input.delta} \
++            --summary {input.summary} \
+             --figures {params.figures_dir} > {log} 2>&1
+-        """
+\ No newline at end of file
++        """

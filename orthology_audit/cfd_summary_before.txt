@@ -1,0 +1,44 @@
+
+FILE: results/07_summary/ISO1_release6_BL54591/conserved_pams.csv
+  rows                                   8,064,494
+  valid_CFD_pairs                        8,064,494 (100.000%)
+  unchanged_abs_delta_le_1e-9            7,420,970 (92.020%)
+  decreased_delta_lt_minus_1e-9            630,979 (7.824%)
+  increased_delta_gt_1e-9                   12,545 (0.156%)
+  delta_le_minus_0.1                       568,836 (7.054%)
+  delta_ge_plus_0.1                          6,504 (0.081%)
+  delta_le_minus_0.25                      503,161 (6.239%)
+  delta_ge_plus_0.25                         3,931 (0.049%)
+  delta_le_minus_0.5                       319,352 (3.960%)
+  delta_ge_plus_0.5                          2,084 (0.026%)
+  delta_le_minus_0.9                        99,618 (1.235%)
+  delta_ge_plus_0.9                            670 (0.008%)
+  both_blocks_assigned                   8,064,494 (100.000%)
+  same_syntenic_block                    8,064,490 (100.000%)
+  different_syntenic_block                       4 (0.000%)
+  distance_le_1000_bp                    8,064,494 (100.000%)
+  distance_gt_1000_bp                            0 (0.000%)
+  query_noncanonical_NGG                   441,865 (5.479%)
+  WARNING: some matches use DIFFERENT syntenic blocks; revisit orthology merge.
+
+FILE: results/07_summary/ISO1_release6_BL54591/failed_tolerance_pams.csv
+  rows                                       3,148
+  valid_CFD_pairs                            3,148 (100.000%)
+  unchanged_abs_delta_le_1e-9                   29 (0.921%)
+  decreased_delta_lt_minus_1e-9              2,760 (87.675%)
+  increased_delta_gt_1e-9                      359 (11.404%)
+  delta_le_minus_0.1                         2,661 (84.530%)
+  delta_ge_plus_0.1                            286 (9.085%)
+  delta_le_minus_0.25                        2,558 (81.258%)
+  delta_ge_plus_0.25                           199 (6.321%)
+  delta_le_minus_0.5                         2,369 (75.254%)
+  delta_ge_plus_0.5                            124 (3.939%)
+  delta_le_minus_0.9                         1,304 (41.423%)
+  delta_ge_plus_0.9                             60 (1.906%)
+  both_blocks_assigned                       3,148 (100.000%)
+  same_syntenic_block                           34 (1.080%)
+  different_syntenic_block                   3,114 (98.920%)
+  distance_le_1000_bp                            0 (0.000%)
+  distance_gt_1000_bp                        3,148 (100.000%)
+  query_noncanonical_NGG                       900 (28.590%)
+  WARNING: some matches use DIFFERENT syntenic blocks; revisit orthology merge.
