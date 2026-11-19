@@ -11,8 +11,10 @@ Definitions (count unique protospacerID, not Bowtie alignment rows):
   synteny_unresolved: shared, but no usable mapped reference/query pair
   ref_only/qry_only: detected in only one raw CFD alignment table
 
-Block agreement is diagnostic, NOT a hard matching criterion: block boundaries
-may split otherwise concordant genomic positions.
+The original one-best-pair outputs below are kept for backward comparison.
+New reports retain all alignment-level target sites and all Cartesian pairs;
+only same-chromosome, same-block matches within tolerance are marked as
+qualifying correspondences. Block boundaries may create unresolved cases.
 """
 
 from svmu2.orchestration.parse import parse
@@ -21,6 +23,7 @@ import argparse
 from pathlib import Path
 import pandas as pd
 import numpy as np
+from target_site_reporting import mark_design_source, write_analysis_tables
 
 DEFAULT_TOLERANCES = (100, 300, 1000, 10000, 100000, 1000000)
 REQUIRED_CFD_COLUMNS = {"protospacerID", "ref_chr", "ref_start", "ref_end"}
@@ -32,6 +35,10 @@ def parse_args():
     parser.add_argument("--query-cfd", required=True, type=Path)
     parser.add_argument("--delta", required=True, type=Path)
     parser.add_argument("--out-dir", required=True, type=Path)
+    parser.add_argument("--source-manifest", type=Path,
+                        help="PAM discovery TSV; enables alignment/site-level reporting")
+    parser.add_argument("--ref-name", default="ISO1")
+    parser.add_argument("--query-name", default="BL54591")
     parser.add_argument("--tol", type=int, default=1000,
                         help="Primary distance threshold for conserved_pams.csv (bp)")
     parser.add_argument("--tolerances", nargs="+", type=int, default=DEFAULT_TOLERANCES,
@@ -151,7 +158,8 @@ def summarize_tolerances(merged_best: pd.DataFrame, counts: dict, tolerances) ->
     return pd.DataFrame(rows)
 
 
-def merge_and_filter(ref_df, qry_df, out_dir, tol, tolerances, counts):
+def merge_and_filter(ref_df, qry_df, out_dir, tol, tolerances, counts,
+                     source=None, ref_name="ISO1", query_name="BL54591"):
     print("[INFO] Selecting nearest projected reference/query alignment per candidate")
     ref_mapped = ref_df.dropna(subset=["syntenic_block", "yhat"])
     qry_mapped = qry_df.dropna(subset=["syntenic_block"])
@@ -227,22 +235,24 @@ def merge_and_filter(ref_df, qry_df, out_dir, tol, tolerances, counts):
     merged["proj_dist"] = (merged["midpoint_qry"] - merged["yhat"]).abs()
     merged["comparable_proj_dist"] = merged["proj_dist"].where(merged["same_chr"])
 
-    # We have already dropped rows without a unique synteny assignment, so
-    # "unresolved" relationships are not present in this Cartesian merge.
-    # Such alignments are recorded by the unmapped_ref/unmapped_qry outputs.
-    merged["relationship"] = "nonsyntenic"
-    merged.loc[
-        merged["same_block"] & (merged["comparable_proj_dist"] > tol),
-        "relationship",
-    ] = "same_block_divergent"
-    merged.loc[
-        merged["same_block"] & (merged["comparable_proj_dist"] <= tol),
-        "relationship",
-    ] = "syntenic"
-    merged.loc[
-        merged["same_block"] & merged["comparable_proj_dist"].isna(),
-        "relationship",
-    ] = "unresolved"
+    # Distinct category labels preserve chromosome/block differences. Only
+    # the first category qualifies as a corresponding genomic target site.
+    # Unassigned alignment rows are NOT in this merge (see unmapped_*.csv).
+    merged["relationship"] = np.select(
+        [merged["same_block"] & (merged["comparable_proj_dist"] <= tol),
+         merged["same_block"] & (merged["comparable_proj_dist"] > tol),
+         merged["same_chr"] & ~merged["same_block"],
+         ~merged["same_chr"]],
+        ["syntenic_within_tolerance", "same_block_outside_tolerance",
+         "same_chr_different_block", "different_chr"],
+        default="unresolved",
+    )
+
+    if source is not None:
+        # Classify every original reference and query alignment, including
+        # rows excluded from the Cartesian merge for ambiguous synteny.
+        write_analysis_tables(ref_df, qry_df, merged, source, out_dir,
+                              ref_name, query_name)
 
 
     audit_ids = [
@@ -273,7 +283,8 @@ def merge_and_filter(ref_df, qry_df, out_dir, tol, tolerances, counts):
         .size()
         .unstack(fill_value=0)
         .reindex(
-            columns=["syntenic", "same_block_divergent", "nonsyntenic", "unresolved"],
+            columns=["syntenic_within_tolerance", "same_block_outside_tolerance",
+                     "same_chr_different_block", "different_chr", "unresolved"],
             fill_value=0,
         )
     )
@@ -296,7 +307,7 @@ def merge_and_filter(ref_df, qry_df, out_dir, tol, tolerances, counts):
     ].min(axis=1)
 
     pair_summary["excess_syntenic"] = (
-        pair_summary["syntenic"]
+        pair_summary["syntenic_within_tolerance"]
         - pair_summary["max_one_to_one"]
     ).clip(lower=0)
 
@@ -312,7 +323,7 @@ def merge_and_filter(ref_df, qry_df, out_dir, tol, tolerances, counts):
 
     print(
         ambiguous[
-            ["n_ref", "n_qry", "syntenic",
+            ["n_ref", "n_qry", "syntenic_within_tolerance",
             "max_one_to_one", "excess_syntenic"]
         ].head(20).to_string()
     )
@@ -322,7 +333,8 @@ def merge_and_filter(ref_df, qry_df, out_dir, tol, tolerances, counts):
         sep="\t"
     )
 
-    relationship_columns = ["syntenic", "same_block_divergent", "nonsyntenic", "unresolved"]
+    relationship_columns = ["syntenic_within_tolerance", "same_block_outside_tolerance",
+                            "same_chr_different_block", "different_chr", "unresolved"]
     if not pair_summary[relationship_columns].sum(axis=1).eq(pair_summary["n_pairs"]).all():
         raise AssertionError("Relationship counts do not add up to Cartesian pair counts")
 
@@ -332,9 +344,10 @@ def merge_and_filter(ref_df, qry_df, out_dir, tol, tolerances, counts):
         .agg(
             protospacers=("n_pairs", "size"),
             total_pairs=("n_pairs", "sum"),
-            syntenic_pairs=("syntenic", "sum"),
-            nonsyntenic_pairs=("nonsyntenic", "sum"),
-            divergent_pairs=("same_block_divergent", "sum"),
+            syntenic_pairs=("syntenic_within_tolerance", "sum"),
+            same_block_outside_tolerance_pairs=("same_block_outside_tolerance", "sum"),
+            same_chr_different_block_pairs=("same_chr_different_block", "sum"),
+            different_chr_pairs=("different_chr", "sum"),
             unresolved_pairs=("unresolved", "sum")
         )
         .reset_index()
@@ -398,7 +411,17 @@ def main():
     print(f"[INFO] Alignment rows without unique synteny: "
           f"{len(unmapped_ref):,} reference; {len(unmapped_qry):,} query")
 
-    merge_and_filter(ref_df, qry_df, args.out_dir, args.tol, args.tolerances, counts)
+    source = None
+    if args.source_manifest is not None:
+        # Load the provenance manifest only when requested. The historical
+        # command-line interface remains usable for small debugging datasets.
+        manifest = pd.read_csv(args.source_manifest, sep="\t")
+        source = mark_design_source(ref_df, manifest)
+        # Give both DataFrames a same-named flag so merge() produces the
+        # explicit _ref/_qry suffixes used by the relationship report.
+        qry_df["is_design_source"] = False
+    merge_and_filter(ref_df, qry_df, args.out_dir, args.tol, args.tolerances,
+                     counts, source, args.ref_name, args.query_name)
 
 if __name__ == "__main__":
     main()

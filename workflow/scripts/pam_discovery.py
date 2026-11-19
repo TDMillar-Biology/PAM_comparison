@@ -1,102 +1,133 @@
 #!/usr/bin/env python3
+"""Discover ISO1-derived 23-mers and retain their exact source loci.
+
+The existing .fa and .bed outputs are unchanged. The additional .tsv manifest
+connects each PAM_n identifier to its guide sequence, PAM and both coordinate
+systems used by the pipeline:
+
+* local: zero-based coordinates in the BED-extracted euchromatin FASTA, used by
+  Bowtie/NUCmer and the reference CFD table;
+* genomic: zero-based coordinates on the original, unextracted ISO1 chromosome.
+"""
 
 import re
 import argparse
+import csv
+from pathlib import Path
 from Bio import SeqIO
 from Bio.Seq import Seq
 
-# ----------------------------
-# PAM patterns (masked-aware)
-# ----------------------------
-
-# Finds overlapping 23-mers (20nt spacer + NGG) excluding all masked regions
+# Overlapping matches: lookahead does not consume the 23-mer, so adjacent PAMs
+# are not accidentally skipped. Lowercase masked bases are intentionally rejected.
 FWD_PATTERN = re.compile(r'(?=([ACGT]{21}GG))')
-
-# Finds overlapping 23-mers on the reverse strand (CCN + 20nt spacer)
 REV_PATTERN = re.compile(r'(?=(CC[ACGT]{21}))')
 
 
 def discover_pams(fasta_path):
-    """
-    PAM generator object read fasta stream output
-    Yield PAM records with coordinates and strand.
-    """
-    for record in SeqIO.parse(fasta_path, "fasta"):
-        chrom = record.id
-        seq = str(record.seq) # don't upper to stay robust to soft masking
+    """Yield each 23-mer with *local* coordinates and its orientation."""
+    with open(fasta_path) as fasta_handle:
+        for record in SeqIO.parse(fasta_handle, "fasta"):
+            chrom = record.id
+            seq = str(record.seq)  # Do not .upper(): that would undo soft masking.
+            for m in FWD_PATTERN.finditer(seq):
+                yield {"chrom": chrom, "start": m.start(1), "end": m.end(1),
+                       "sequence": m.group(1), "strand": "+"}
+            for m in REV_PATTERN.finditer(seq):
+                # On '-' strand the source interval is CCN+20nt; its reverse
+                # complement is the usual 20nt-spacer + NGG guide orientation.
+                oriented = str(Seq(m.group(1)).reverse_complement())
+                yield {"chrom": chrom, "start": m.start(1), "end": m.end(1),
+                       "sequence": oriented, "strand": "-"}
 
-        # Forward strand NGG
-        for m in FWD_PATTERN.finditer(seq):
-            yield {
-                "chrom": chrom,
-                "start": m.start(1), # start index of sub string in greater string
-                "end": m.end(1), # end index
-                "sequence": m.group(1), # sequence matching the RE pattern (ie the 23mer)
-                "strand": "+"
-            }
+def source_offsets(source_bed):
+    """Read offsets of intervals used to build the euchromatin FASTA.
 
-        # Reverse strand CCN
-        for m in REV_PATTERN.finditer(seq):
-            # Reverse complement to orient as 20nt + NGG
-            pam_seq = str(Seq(m.group(1)).reverse_complement())
-            yield {
-                "chrom": chrom,
-                "start": m.start(1),
-                "end": m.end(1),
-                "sequence": pam_seq,
-                "strand": "-"
-            }
-
-
-def write_outputs(pam_generator, prefix):
+    The current extraction rule removes the start offset from FASTA headers.
+    Its chromosome names therefore refer to local subsequences, not full
+    chromosome coordinates. We require one interval per chromosome to avoid
+    silently assigning incorrect genomic coordinates.
     """
-    Write FASTA and BED outputs streaming directly from the generator.
-    """
-    fasta_path = f"{prefix}.fa"
-    bed_path = f"{prefix}.bed"
+    if source_bed is None:
+        return {}
+    offsets = {}
+    with open(source_bed) as fh:
+        for line in fh:
+            if not line.strip() or line.startswith("#"):
+                continue
+            chrom, start, end, *_ = line.rstrip("\n").split("\t")
+            if chrom in offsets:
+                raise ValueError(
+                    f"More than one interval for {chrom} in {source_bed}; "
+                    "the current FASTA-header stripping rule cannot retain "
+                    "multiple independent coordinate offsets per chromosome"
+                )
+            start, end = int(start), int(end)
+            if start < 0 or end <= start:
+                raise ValueError(f"Invalid source interval: {line.rstrip()}")
+            offsets[chrom] = (start, end)
+    return offsets
+
+
+def write_outputs(pam_generator, prefix, offsets=None):
+    """Write FASTA, local-coordinate BED and a joined provenance TSV."""
+    offsets = offsets or {}
+    fasta_path, bed_path, manifest_path = (
+        f"{prefix}.fa", f"{prefix}.bed", f"{prefix}.tsv"
+    )
+    fields = ["protospacerID", "source_chr", "source_start_local",
+              "source_end_local", "source_start", "source_end",
+              "source_strand", "guide_23mer", "guide_20mer", "source_pam"]
     count = 0
-
-    with open(fasta_path, "w") as fa, open(bed_path, "w") as bed:
+    with (open(fasta_path, "w") as fa,
+          open(bed_path, "w") as bed,
+          open(manifest_path, "w", newline="") as manifest):
+        writer = csv.DictWriter(manifest, fieldnames=fields, delimiter="\t")
+        writer.writeheader()
         for p in pam_generator:
             count += 1
             name = f"PAM_{count}"
-
-            # FASTA
-            fa.write(f">{name}\n{p['sequence']}\n")
-
-            # BED
-            bed.write(
-                f"{p['chrom']}\t{p['start']}\t{p['end']}\t"
-                f"{name}\t0\t{p['strand']}\n"
-            )
-
+            seq = p["sequence"]
+            if len(seq) != 23:
+                raise AssertionError(f"Unexpected {len(seq)}-nt guide for {name}")
+            if offsets and p["chrom"] not in offsets:
+                raise ValueError(f"{p['chrom']} missing from source interval BED")
+            offset, limit = offsets.get(p["chrom"], (0, None))
+            if limit is not None and p["end"] > limit - offset:
+                raise ValueError(f"{name} extends beyond {p['chrom']} source interval")
+            fa.write(f">{name}\n{seq}\n")
+            # Keep BED local to the extracted FASTA (not the full chromosome).
+            bed.write(f"{p['chrom']}\t{p['start']}\t{p['end']}\t"
+                      f"{name}\t0\t{p['strand']}\n")
+            writer.writerow({
+                "protospacerID": name, "source_chr": p["chrom"],
+                "source_start_local": p["start"],
+                "source_end_local": p["end"],
+                "source_start": offset + p["start"],
+                "source_end": offset + p["end"],
+                "source_strand": p["strand"],
+                "guide_23mer": seq, "guide_20mer": seq[:20],
+                "source_pam": seq[21:23],
+            })
     print(f"Wrote {fasta_path}")
     print(f"Wrote {bed_path}")
+    print(f"Wrote {manifest_path}")
     return count
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Discover masked-aware Cas9 PAM-adjacent 23mers"
-    )
-    parser.add_argument(
-        "-i", "--input",
-        required=True,
-        help="Masked FASTA (e.g. ISO1 euchromatin)"
-    )
-    parser.add_argument(
-        "-o", "--outprefix",
-        required=True,
-        help="Output prefix. Outputs will be prefix.bed, prefix.fa"
-    )
-
+        description="Discover masked-aware Cas9 PAM-adjacent 23mers")
+    parser.add_argument("-i", "--input", required=True,
+                        help="Masked, extracted euchromatin FASTA")
+    parser.add_argument("-o", "--outprefix", required=True)
+    parser.add_argument("--source-bed", type=Path,
+                        help="BED intervals used to extract euchromatin; "
+                             "adds original-chromosome coordinate offsets")
     args = parser.parse_args()
+    total = write_outputs(discover_pams(args.input), args.outprefix,
+                          source_offsets(args.source_bed))
+    print(f"[INFO] Discovered {total:,} PAM sites")
 
-    # Pass the generator directly to the writer to save RAM
-    pam_generator = discover_pams(args.input)
-    total_found = write_outputs(pam_generator, args.outprefix)
-    
-    print(f"[INFO] Discovered {total_found:,} PAM sites")
 
 if __name__ == "__main__":
     main()

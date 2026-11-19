@@ -5,16 +5,23 @@ rule map_pam_orthology:
     input:
         ref_cfd = rules.compute_cfd_ref.output.cfd,
         qry_cfd = rules.compute_cfd_qry.output.cfd,
-        delta   = rules.nucmer_synteny.output.delta
+        delta   = rules.nucmer_synteny.output.delta,
+        # Each guide ID is tied to its original ISO1 locus and PAM here.
+        source_manifest = rules.discover_pams.output.manifest
     output:
         conserved = f"results/07_summary/{config['ref_name']}_{config['query_name']}/conserved_pams.csv",
         failed = f"results/07_summary/{config['ref_name']}_{config['query_name']}/failed_tolerance_pams.csv",
         unmapped_ref = f"results/07_summary/{config['ref_name']}_{config['query_name']}/unmapped_ref.csv",
         unmapped_qry = f"results/07_summary/{config['ref_name']}_{config['query_name']}/unmapped_qry.csv",
-        tolerance_summary = f"results/07_summary/{config['ref_name']}_{config['query_name']}/conservation_by_tolerance.tsv"
+        tolerance_summary = f"results/07_summary/{config['ref_name']}_{config['query_name']}/conservation_by_tolerance.tsv",
+        target_sites = f"results/07_summary/{config['ref_name']}_{config['query_name']}/target_sites.tsv.gz",
+        relationships = f"results/07_summary/{config['ref_name']}_{config['query_name']}/site_relationships.tsv.gz",
+        guide_summary = f"results/07_summary/{config['ref_name']}_{config['query_name']}/guide_targeting_summary.tsv.gz"
     params:
         out_dir = f"results/07_summary/{config['ref_name']}_{config['query_name']}",
-        tol     = config.get("cfd", {}).get("tolerance", 1000)
+        tol     = config.get("cfd", {}).get("tolerance", 1000),
+        ref_name = config["ref_name"],
+        query_name = config["query_name"]
     log:
         f"logs/07_summary/map_pam_orthology_{config['ref_name']}_{config['query_name']}.log"
     container:
@@ -29,6 +36,9 @@ rule map_pam_orthology:
             --ref-cfd {input.ref_cfd} \
             --query-cfd {input.qry_cfd} \
             --delta {input.delta} \
+            --source-manifest {input.source_manifest} \
+            --ref-name {params.ref_name} \
+            --query-name {params.query_name} \
             --out-dir {params.out_dir} \
             --tol {params.tol} > {log} 2>&1
         """
