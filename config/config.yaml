@@ -9,6 +9,10 @@ test_mode: False # Set to true to run analysis on a 1% sample of PAMs for rapid 
 threads: 32
 
 # Data Paths
+# Complete ISO1 release 6.58 for reference-guided scaffolding.
+scaffolding_reference: "data/reference_genome/ISO1-r6.58.fasta"
+
+# Six canonical chromosome sequences, generated from scaffolding_reference.
 ref_genome: "data/reference_genome/ISO1-r6.58_main.fasta"
 ref_name: "ISO1_release6"
 

@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
-"""Discover ISO1-derived 23-mers and retain their exact source loci.
+"""Discover ISO1-derived 23-mers with provenance in genomic coordinates.
 
-The existing .fa and .bed outputs are unchanged. The additional .tsv manifest
-connects each PAM_n identifier to its guide sequence, PAM and both coordinate
-systems used by the pipeline:
-
-* local: zero-based coordinates in the BED-extracted euchromatin FASTA, used by
-  Bowtie/NUCmer and the reference CFD table;
-* genomic: zero-based coordinates on the original, unextracted ISO1 chromosome.
+The input FASTA is now full-length and N-masked *outside* euchromatin.
+The .fa guide IDs, .bed source sites, and .tsv manifest all share original
+chromosome coordinates. The legacy `*_local` columns remain for compatibility
+but are now identical to genomic coordinates (zero-based, half-open).
 """
 
 import re
@@ -24,7 +21,7 @@ REV_PATTERN = re.compile(r'(?=(CC[ACGT]{21}))')
 
 
 def discover_pams(fasta_path):
-    """Yield each 23-mer with *local* coordinates and its orientation."""
+    """Yield each 23-mer with genomic coordinates and its orientation."""
     with open(fasta_path) as fasta_handle:
         for record in SeqIO.parse(fasta_handle, "fasta"):
             chrom = record.id
@@ -69,7 +66,7 @@ def source_offsets(source_bed):
 
 
 def write_outputs(pam_generator, prefix, offsets=None):
-    """Write FASTA, local-coordinate BED and a joined provenance TSV."""
+    """Write FASTA, genomic-coordinate BED and a joined provenance TSV."""
     offsets = offsets or {}
     fasta_path, bed_path, manifest_path = (
         f"{prefix}.fa", f"{prefix}.bed", f"{prefix}.tsv"
@@ -95,7 +92,7 @@ def write_outputs(pam_generator, prefix, offsets=None):
             if limit is not None and p["end"] > limit - offset:
                 raise ValueError(f"{name} extends beyond {p['chrom']} source interval")
             fa.write(f">{name}\n{seq}\n")
-            # Keep BED local to the extracted FASTA (not the full chromosome).
+            # Full-length masked FASTA: BED coordinates are now genomic.
             bed.write(f"{p['chrom']}\t{p['start']}\t{p['end']}\t"
                       f"{name}\t0\t{p['strand']}\n")
             writer.writerow({
@@ -118,12 +115,12 @@ def main():
     parser = argparse.ArgumentParser(
         description="Discover masked-aware Cas9 PAM-adjacent 23mers")
     parser.add_argument("-i", "--input", required=True,
-                        help="Masked, extracted euchromatin FASTA")
+                        help="Full-length ISO1 FASTA with non-euchromatin hard-masked")
     parser.add_argument("-o", "--outprefix", required=True)
     parser.add_argument("--source-bed", type=Path,
-                        help="BED intervals used to extract euchromatin; "
-                             "adds original-chromosome coordinate offsets")
+                        help="Legacy option for a BED-extracted FASTA; omit for full-length coordinate-preserving discovery")
     args = parser.parse_args()
+    # Without --source-bed, offsets are zero and local/genomic positions match.
     total = write_outputs(discover_pams(args.input), args.outprefix,
                           source_offsets(args.source_bed))
     print(f"[INFO] Discovered {total:,} PAM sites")

@@ -65,3 +65,33 @@ rule summarize_cfd:
             {input.failed} \
             > {output.report} 2> {log}
         """
+
+
+rule summarize_targeting_landscape:
+    input:
+        # Use the mapper's declared output, not a hard-coded assembly pair.
+        guide_summary = rules.map_pam_orthology.output.guide_summary
+    output:
+        report = f"results/07_summary/{config['ref_name']}_{config['query_name']}/targeting_landscape_summary.txt",
+        table = f"results/07_summary/{config['ref_name']}_{config['query_name']}/targeting_landscape_summary.tsv"
+    log:
+        f"logs/07_summary/summarize_targeting_landscape_{config['ref_name']}_{config['query_name']}.log"
+    params:
+        ref_label = config["ref_name"],
+        query_label = config["query_name"]
+    container:
+        "workflow/containers/images/python_analysis.sif"
+    threads: 1
+    resources:
+        mem_mb = 4000,
+        runtime = 60
+    shell:
+        """
+        python3 workflow/scripts/summarize_targeting_landscape.py \
+            --guide-summary {input.guide_summary:q} \
+            --report {output.report:q} \
+            --table {output.table:q} \
+            --ref-label {params.ref_label:q} \
+            --query-label {params.query_label:q} \
+            > {log:q} 2>&1
+        """

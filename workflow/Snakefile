@@ -20,5 +20,7 @@ rule all:
     input:
         rules.plot_tolerance_venns.output.sunburst_plot,
         rules.plot_synteny_diagnostics.output.plot,
-        rules.summarize_cfd.output.report
+        rules.summarize_cfd.output.report,
+        rules.summarize_targeting_landscape.output.report,
+        rules.summarize_targeting_landscape.output.table
     default_target: True

@@ -2,7 +2,7 @@
 
 rule nucmer_synteny:
     input:
-        ref = rules.extract_and_fix_euchromatin.output.fixed_fa,
+        ref = rules.prepare_canonical_reference.output.fasta,
         qry = rules.extract_main_scaffolds.output.main_fasta
     output:
         delta = f"results/04_synteny/{config['ref_name']}_{config['query_name']}.delta"

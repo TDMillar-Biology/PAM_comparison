@@ -2,7 +2,7 @@
 
 rule bowtie_index_ref:
     input:
-        ref = rules.extract_and_fix_euchromatin.output.fixed_fa
+        ref = rules.prepare_canonical_reference.output.fasta
     output:
         idx = f"results/05_alignment/{config['ref_name']}/{config['ref_name']}.1.ebwt"
     log:

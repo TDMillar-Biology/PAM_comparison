@@ -3,7 +3,7 @@
 rule compute_cfd_ref:
     input:
         sam = rules.bowtie_align_ref.output.sam,
-        ref = rules.extract_and_fix_euchromatin.output.fixed_fa,
+        ref = rules.prepare_canonical_reference.output.fasta,
         mismatch_scores = config["cfd"]["mismatch_scores"],
         pam_scores = config["cfd"]["pam_scores"]
     output:

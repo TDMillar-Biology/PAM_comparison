@@ -21,9 +21,9 @@ RELATIONSHIP_TYPES = (
 def mark_design_source(ref_df, manifest):
     """Tag the ISO1 alignment at the exact original guide discovery locus.
 
-    Source BED coordinates are *local to extracted euchromatin*, exactly like
-    the reference CFD coordinates. The absolute source coordinates are kept
-    separately in the manifest for manuscript reporting.
+    The discovery FASTA is now chromosome-length, so `source_start_local` and
+    `source_end_local` equal genomic coordinates and align directly to CFD
+    positions from the full ISO1 genome.
 
     We also compare oriented 23-mer sequences, not merely coordinates, to
     avoid assigning a hit on the opposite strand to the original source.

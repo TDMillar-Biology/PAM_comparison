@@ -3,7 +3,6 @@
 rule discover_pams:
     input:
         masked = rules.repeat_masker.output.masked,
-        source_bed = config["euchromatin_bed"]
     output:
         fa  = f"results/03_pam_discovery/{config['ref_name']}.masked.euchromatic.PAMs.fa",
         bed = f"results/03_pam_discovery/{config['ref_name']}.masked.euchromatic.PAMs.bed",
@@ -18,8 +17,7 @@ rule discover_pams:
         """
         python3 workflow/scripts/pam_discovery.py \
             -i {input.masked} \
-            -o {params.out_prefix} \
-            --source-bed {input.source_bed} > {log} 2>&1
+            -o {params.out_prefix} > {log} 2>&1
         """
 
 rule sample_pams:

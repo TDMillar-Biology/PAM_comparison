@@ -1,8 +1,36 @@
 # workflow/rules/01_scaffolding/scaffold.smk
 
+# Keep the original full ISO1 reference separate from the six-chromosome
+# representation used for CRISPR discovery, mapping, CFD and synteny.
+# faidx selects entire chromosomes, so per-chromosome coordinates are unchanged.
+rule prepare_canonical_reference:
+    input:
+        fasta = config["scaffolding_reference"]
+    output:
+        fasta = config["ref_genome"],
+        fai = config["ref_genome"] + ".fai"
+    params:
+        chromosomes = " ".join(str(c) for c in config["main_chromosomes"])
+    log:
+        "logs/01_scaffolding/prepare_canonical_reference.log"
+    container:
+        "workflow/containers/images/01_scaffolding.sif"
+    shell:
+        """
+        set -euo pipefail
+
+        # Index the FULL reference, then extract only the configured arms.
+        samtools faidx {input.fasta:q} > {log:q} 2>&1
+        samtools faidx {input.fasta:q} {params.chromosomes} \
+            > {output.fasta:q} 2>> {log:q}
+
+        # Track the derived index too; CFD uses random-access sequence fetches.
+        samtools faidx {output.fasta:q} >> {log:q} 2>&1
+        """
+
 rule mummer_for_scaffolding:
     input:
-        reference = config["ref_genome"],
+        reference = config["scaffolding_reference"],
         query = config["query_assembly"]
     output:
         delta = f"results/01_scaffolding/{config['ref_name']}_{config['query_name']}.delta"

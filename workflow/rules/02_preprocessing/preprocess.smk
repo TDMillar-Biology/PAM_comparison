@@ -1,27 +1,40 @@
 # workflow/rules/02_preprocessing/preprocess.smk
 
-rule extract_and_fix_euchromatin:
+## Keep the original ISO1 chromosome coordinates during guide discovery.
+## The BED lists regions to KEEP; complement identifies bases to hard-mask.
+## Unlike bedtools getfasta, maskfasta never changes sequence lengths/offsets.
+rule mask_non_euchromatin:
     input:
-        ref = config["ref_genome"],
+        ref = rules.prepare_canonical_reference.output.fasta,
         bed = config["euchromatin_bed"]
     output:
-        fixed_fa = f"results/02_preprocessing/{config['ref_name']}_euchromatin.fixed.fasta"
+        masked_fa = f"results/02_preprocessing/{config['ref_name']}.euchromatin_hardmasked.fasta",
+        excluded_bed = f"results/02_preprocessing/{config['ref_name']}.non_euchromatin.bed",
+        genome = f"results/02_preprocessing/{config['ref_name']}.genome"
     log:
-        "logs/02_preprocessing/extract_and_fix_euchromatin.log"
+        "logs/02_preprocessing/mask_non_euchromatin.log"
     container:
         "workflow/containers/images/02_preprocessing.sif"
     shell:
         """
-        (bedtools getfasta -fi {input.ref} -bed {input.bed} | \
-        sed -E 's/^>([^:]+):.*$/>\\1/' > {output.fixed_fa}) > {log} 2>&1
+        set -euo pipefail
+        # The FASTA index supplies chromosome lengths and order for BEDTools.
+        samtools faidx {input.ref:q} > {log:q} 2>&1
+        cut -f1,2 {input.ref:q}.fai > {output.genome:q}
+        bedtools sort -i {input.bed:q} -g {output.genome:q} | \
+            bedtools complement -i stdin -g {output.genome:q} \
+            > {output.excluded_bed:q} 2>> {log:q}
+        bedtools maskfasta -fi {input.ref:q} \
+            -bed {output.excluded_bed:q} \
+            -fo {output.masked_fa:q} >> {log:q} 2>&1
         """
 
 rule repeat_masker:
     input:
-        fa = rules.extract_and_fix_euchromatin.output.fixed_fa,
+        fa = rules.mask_non_euchromatin.output.masked_fa,
         lib = config["repeat_lib"]
     output:
-        masked = f"results/02_preprocessing/{config['ref_name']}_euchromatin.fixed.fasta.masked"
+        masked = f"results/02_preprocessing/{config['ref_name']}.euchromatin_hardmasked.fasta.masked"
     log:
         "logs/02_preprocessing/repeat_masker.log"
     container:
