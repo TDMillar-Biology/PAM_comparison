@@ -10,6 +10,12 @@ data/
 *.tgz
 *.zip
 
+# patches
+*.patch
+
+
+unmatched_sites.tsv
+
 # Apptainer / Singularity images
 *.sif
 *.simg

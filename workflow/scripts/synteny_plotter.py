@@ -45,64 +45,44 @@ def plot_chromosome_traces(data_dir, fig_dir):
         ax_trace.scatter(sub['midpoint_ref'], sub['midpoint_qry'], color='red', label='Mapped Midpoint (Truth)', alpha=0.6, s=10)
         ax_trace.scatter(sub['midpoint_ref'], sub['yhat'], color='blue', label='yhat (Interpolated)', alpha=0.6, s=10)
 
-        # 2. Create the inset axes
-        # The coordinates are [x0, y0, width, height] relative to the main axes (0 to 1)
-        # Placing it in the top left (0.1, 0.5) to avoid your main data line
-        axins = ax_trace.inset_axes([0.1, 0.5, 0.35, 0.35])
-
-        # 3. Plot the exact same data on the inset axes
-        # Note: You can optionally increase 's' (marker size) here if you want them highly visible
-        axins.scatter(sub['midpoint_ref'], sub['midpoint_qry'], color='red', alpha=0.4, s=15)
-        axins.scatter(sub['midpoint_ref'], sub['yhat'], color='blue', alpha=0.4, s=15)
-
-        # 4. Define your zoom window
+        # Optional detail inset: skip when the selected window has no valid points.
+        # In particular, chromosome 4 is shorter than the old fixed 10 Mb center.
         zoom_x_center = 10000000
-        window_size = 1000 # 2500 bp window
+        window_size = 1000
+        x_min = zoom_x_center - window_size / 2
+        x_max = zoom_x_center + window_size / 2
+        window_data = sub.loc[
+            sub['midpoint_ref'].between(x_min, x_max)
+            & np.isfinite(sub['midpoint_qry'])
+        ]
 
-        x_min = zoom_x_center - (window_size / 2)
-        x_max = zoom_x_center + (window_size / 2)
+        if window_data.empty:
+            print(f"[WARN] No data near {zoom_x_center:,} bp on {chrom}; skipping inset.")
+        else:
+            zoom_y_center = round(float(window_data['midpoint_qry'].mean()), -2)
+            axins = ax_trace.inset_axes([0.1, 0.5, 0.35, 0.35])
+            axins.scatter(sub['midpoint_ref'], sub['midpoint_qry'], color='red', alpha=0.4, s=15)
+            axins.scatter(sub['midpoint_ref'], sub['yhat'], color='blue', alpha=0.4, s=15)
+            axins.set_xlim(x_min, x_max)
+            axins.set_ylim(zoom_y_center - 500, zoom_y_center + 500)
 
-        # Find the corresponding Y center based on the data in this window
-        window_data = sub[(sub['midpoint_ref'] >= x_min) & (sub['midpoint_ref'] <= x_max)]
-        raw_y_center = window_data['midpoint_qry'].mean()
-        
-        # FIX: Round the mean to the nearest 100 or 500 for clean offset ticks
-        zoom_y_center = round(raw_y_center, -2) # -2 rounds to nearest 100
+            def format_x_tick(x, pos):
+                return f"{int(x - zoom_x_center):+g}"
 
-        # Define the Y limits to keep it perfectly centered around the data
-        y_window = 1000 # Set a fixed window size for Y as well 
-        y_min = zoom_y_center - (y_window / 2)
-        y_max = zoom_y_center + (y_window / 2)
+            def format_y_tick(y, pos):
+                return f"{int(y - zoom_y_center):+g}"
 
-        # 5. Apply the limits to the inset
-        axins.set_xlim(x_min, x_max)
-        axins.set_ylim(y_min, y_max)
+            axins.xaxis.set_major_formatter(ticker.FuncFormatter(format_x_tick))
+            axins.yaxis.set_major_formatter(ticker.FuncFormatter(format_y_tick))
+            axins.set_xlabel('Reference Offset (bp)', fontsize=9)
+            axins.set_ylabel('Query Offset (bp)', fontsize=9)
+            axins.tick_params(axis='both', which='major', labelsize=7)
+            center_text = f"Centered at:\n({int(zoom_x_center):,}, {int(zoom_y_center):,})"
+            axins.text(0.95, 0.05, center_text, transform=axins.transAxes,
+                       horizontalalignment='right', verticalalignment='bottom',
+                       fontsize=7, bbox=dict(facecolor='white', alpha=0.6, edgecolor='none'))
+            ax_trace.indicate_inset_zoom(axins, edgecolor='black')
 
-        # Force the tick labels to display as offsets (e.g., -100, 0, +100)
-        def format_x_tick(x, pos):
-            return f"{int(x - zoom_x_center):+g}"
-
-        def format_y_tick(y, pos):
-            return f"{int(y - zoom_y_center):+g}"
-
-        axins.xaxis.set_major_formatter(ticker.FuncFormatter(format_x_tick))
-        axins.yaxis.set_major_formatter(ticker.FuncFormatter(format_y_tick))
-
-        # Update labels to indicate these are offsets
-        axins.set_xlabel('Reference Offset (bp)', fontsize=9)
-        axins.set_ylabel('Query Offset (bp)', fontsize=9)
-        axins.tick_params(axis='both', which='major', labelsize=7)
-
-        # Add the center coordinate text to the bottom right
-        # transform=axins.transAxes makes (1,0) the exact bottom right corner of the inset
-        center_text = f"Centered at:\n(10M, {int(zoom_y_center):,})"
-        axins.text(0.95, 0.05, center_text, transform=axins.transAxes, 
-                horizontalalignment='right', verticalalignment='bottom', 
-                fontsize=7, bbox=dict(facecolor='white', alpha=0.6, edgecolor='none'))
-
-        # 6. Draw the magic connecting lines from the inset to the main plot
-        ax_trace.indicate_inset_zoom(axins, edgecolor="black")
-        
         # Formatting - Keeping absolute terms
         ax_trace.set_title(f"Synteny Trace: Chromosome {chrom}", pad=15)
         ax_trace.set_xlabel("Reference Midpoint (Absolute bp)", fontsize=12)
